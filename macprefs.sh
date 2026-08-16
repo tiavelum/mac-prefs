@@ -1,0 +1,423 @@
+#!/usr/bin/env bash
+#
+# macprefs.sh -- carry macOS app preferences to a new Mac without Migration Assistant.
+#
+#   ./macprefs.sh export              # on the OLD Mac: dump domains to ./macprefs-export
+#   ./macprefs.sh import <dir>        # on the NEW Mac: load them back
+#   ./macprefs.sh list                # show which domains exist on this Mac
+#   ./macprefs.sh diff <dir>          # compare an export against this Mac
+#
+# Domains are read from macprefs-domains.conf next to this script.
+#
+# Import always writes a rollback backup of whatever it is about to overwrite,
+# so a bad import is one command away from being undone.
+#
+# Written for the stock /bin/bash 3.2 that ships with macOS -- no bash 4 features.
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+CONF="${MACPREFS_CONF:-$SCRIPT_DIR/macprefs-domains.conf}"
+DEFAULT_OUT="$SCRIPT_DIR/macprefs-export"
+
+DRY_RUN=0
+ASSUME_YES=0
+QUIT_APPS=0
+MP_TMP=""
+
+# ---------------------------------------------------------------- output helpers
+
+if [ -t 1 ]; then
+  C_DIM=$'\033[2m'; C_RED=$'\033[31m'; C_GRN=$'\033[32m'
+  C_YEL=$'\033[33m'; C_BLD=$'\033[1m'; C_RST=$'\033[0m'
+else
+  C_DIM=""; C_RED=""; C_GRN=""; C_YEL=""; C_BLD=""; C_RST=""
+fi
+
+info() { printf '%s\n' "$*"; }
+ok()   { printf '%s  ok%s  %s\n'  "$C_GRN" "$C_RST" "$*"; }
+skip() { printf '%sskip%s  %s\n'  "$C_DIM" "$C_RST" "$*"; }
+warn() { printf '%swarn%s  %s\n'  "$C_YEL" "$C_RST" "$*" >&2; }
+die()  { printf '%sfail%s  %s\n'  "$C_RED" "$C_RST" "$*" >&2; exit 1; }
+
+# ---------------------------------------------------------------- preflight
+
+require_macos() {
+  [ "$(uname -s)" = "Darwin" ] || die "this script only runs on macOS (found $(uname -s))"
+  command -v defaults >/dev/null 2>&1 || die "'defaults' not found in PATH"
+  command -v plutil   >/dev/null 2>&1 || die "'plutil' not found in PATH"
+}
+
+# Prints one domain per line: comments stripped, blanks dropped, de-duplicated.
+read_domains() {
+  [ -f "$CONF" ] || die "domain list not found: $CONF"
+  sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$CONF" \
+    | awk 'NF && !seen[$0]++'
+}
+
+domain_exists() {
+  [ "$1" = "NSGlobalDomain" ] && return 0
+  defaults read "$1" >/dev/null 2>&1
+}
+
+# domain -> application process name, for apps that must be quit before their
+# prefs are rewritten. A running app flushes its in-memory copy on exit and
+# will happily clobber whatever you just imported.
+QUITTABLE="
+com.apple.Photos:Photos
+com.apple.Safari:Safari
+com.apple.mail:Mail
+com.apple.iCal:Calendar
+com.apple.AddressBook:Contacts
+com.apple.Notes:Notes
+com.apple.reminders:Reminders
+com.apple.Terminal:Terminal
+com.apple.Preview:Preview
+com.apple.TextEdit:TextEdit
+com.apple.ActivityMonitor:Activity Monitor
+"
+
+# Args: domain list. Prints the names of affected apps that are running now.
+running_apps_for_domains() {
+  local doms=" $* "
+  local line dom app
+  printf '%s\n' "$QUITTABLE" | while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    dom="${line%%:*}"
+    app="${line#*:}"
+    case "$doms" in
+      *" $dom "*)
+        if pgrep -x "$app" >/dev/null 2>&1; then printf '%s\n' "$app"; fi
+        ;;
+    esac
+  done
+}
+
+quit_app() {
+  local app="$1" n=0
+  osascript -e "tell application \"$app\" to quit" >/dev/null 2>&1 || true
+  while pgrep -x "$app" >/dev/null 2>&1 && [ "$n" -lt 20 ]; do
+    sleep 0.5; n=$((n + 1))
+  done
+  ! pgrep -x "$app" >/dev/null 2>&1
+}
+
+confirm() {
+  [ "$ASSUME_YES" -eq 1 ] && return 0
+  local reply=""
+  if [ -r /dev/tty ]; then
+    read -r -p "$1 [y/N] " reply </dev/tty || return 1
+  else
+    read -r -p "$1 [y/N] " reply || return 1
+  fi
+  case "$reply" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
+}
+
+# ---------------------------------------------------------------- export
+
+cmd_export() {
+  require_macos
+  local out="${1:-$DEFAULT_OUT}"
+  [ -n "$out" ] || out="$DEFAULT_OUT"
+
+  local stamp; stamp="$(date +%Y-%m-%d-%H%M%S)"
+  local dir="$out/$stamp"
+
+  local domains; domains="$(read_domains)"
+  [ -n "$domains" ] || die "no domains listed in $CONF"
+  local count; count="$(printf '%s\n' "$domains" | wc -l | tr -d ' ')"
+
+  info "${C_BLD}Exporting $count domains${C_RST} -> $dir"
+  info ""
+
+  local running; running="$(running_apps_for_domains $domains)"
+  if [ -n "$running" ]; then
+    warn "these apps are running; quit them for a fully current export:"
+    warn "  $(printf '%s' "$running" | tr '\n' ' ')"
+    info ""
+  fi
+
+  [ "$DRY_RUN" -eq 1 ] || mkdir -p "$dir"
+
+  local exported=0 skipped=0 d safe
+  for d in $domains; do
+    if ! domain_exists "$d"; then
+      skip "$d ${C_DIM}(not set on this Mac)${C_RST}"
+      skipped=$((skipped + 1))
+      continue
+    fi
+    safe="$(printf '%s' "$d" | tr '/' '_')"
+    if [ "$DRY_RUN" -eq 1 ]; then
+      ok "$d ${C_DIM}(dry run)${C_RST}"
+    elif defaults export "$d" "$dir/$safe.plist" 2>/dev/null; then
+      ok "$d"
+    else
+      warn "$d -- export failed, skipping"
+      skipped=$((skipped + 1))
+      continue
+    fi
+    exported=$((exported + 1))
+  done
+
+  if [ "$DRY_RUN" -eq 0 ]; then
+    {
+      echo "macprefs_version 1"
+      echo "exported_at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+      echo "source_host $(scutil --get ComputerName 2>/dev/null || hostname)"
+      echo "macos_version $(sw_vers -productVersion)"
+      echo "macos_build $(sw_vers -buildVersion)"
+      echo "domain_count $exported"
+    } > "$dir/MANIFEST.txt"
+    ln -sfn "$stamp" "$out/latest"
+  fi
+
+  info ""
+  info "${C_BLD}$exported exported, $skipped skipped${C_RST}"
+  if [ "$DRY_RUN" -eq 0 ]; then
+    info "Folder: $dir"
+    info ""
+    info "Copy that folder to the new Mac, then run:"
+    info "  ./macprefs.sh import <folder> --quit-apps"
+  fi
+}
+
+# ---------------------------------------------------------------- import
+
+cmd_import() {
+  require_macos
+  local dir="${1:-}"
+  [ -n "$dir" ] || die "usage: $0 import <export-folder>"
+  [ -d "$dir" ] || die "not a folder: $dir"
+  # allow passing the parent folder -- resolve the 'latest' symlink for them
+  if [ ! -f "$dir/MANIFEST.txt" ] && [ -d "$dir/latest" ]; then
+    dir="$dir/latest"
+  fi
+  [ -f "$dir/MANIFEST.txt" ] || warn "no MANIFEST.txt in $dir -- proceeding anyway"
+
+  if [ -f "$dir/MANIFEST.txt" ]; then
+    local src_ver here_ver src_major here_major
+    src_ver="$(awk '/^macos_version/{print $2}' "$dir/MANIFEST.txt")"
+    here_ver="$(sw_vers -productVersion)"
+    src_major="${src_ver%%.*}"; here_major="${here_ver%%.*}"
+    info "${C_DIM}export from macOS $src_ver  ->  this Mac runs macOS $here_ver${C_RST}"
+    if [ -n "$src_major" ] && [ "$src_major" != "$here_major" ]; then
+      warn "different major macOS versions -- preferences usually survive this,"
+      warn "but obsolete keys may come along. The rollback backup covers you."
+    fi
+    info ""
+  fi
+
+  local plists=""
+  local f
+  for f in "$dir"/*.plist; do
+    [ -e "$f" ] || continue
+    plists="$plists$f
+"
+  done
+  [ -n "$plists" ] || die "no .plist files found in $dir"
+
+  # Map filenames back to domain names.
+  local doms="" base d
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    base="$(basename "$f" .plist)"
+    doms="$doms $(printf '%s' "$base" | tr '_' '/')"
+  done <<EOF
+$plists
+EOF
+
+  local running; running="$(running_apps_for_domains $doms)"
+  if [ -n "$running" ]; then
+    if [ "$QUIT_APPS" -eq 1 ]; then
+      local app
+      while IFS= read -r app; do
+        [ -n "$app" ] || continue
+        if quit_app "$app"; then ok "quit $app"; else warn "could not quit $app"; fi
+      done <<EOF
+$running
+EOF
+      info ""
+    else
+      warn "running apps will overwrite imported prefs when they exit:"
+      warn "  $(printf '%s' "$running" | tr '\n' ' ')"
+      warn "quit them first, or re-run with --quit-apps"
+      confirm "Continue anyway?" || die "aborted"
+      info ""
+    fi
+  fi
+
+  # Rollback snapshot of current state, taken before anything is touched.
+  local backup=""
+  if [ "$DRY_RUN" -eq 0 ]; then
+    backup="$HOME/.macprefs-rollback/$(date +%Y-%m-%d-%H%M%S)"
+    mkdir -p "$backup"
+    local safe
+    for d in $doms; do
+      safe="$(printf '%s' "$d" | tr '/' '_')"
+      if domain_exists "$d"; then
+        defaults export "$d" "$backup/$safe.plist" 2>/dev/null || true
+      fi
+    done
+    printf 'macprefs_version 1\nrollback_for %s\ncreated %s\n' \
+      "$dir" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$backup/MANIFEST.txt"
+    info "${C_DIM}rollback backup: $backup${C_RST}"
+    info ""
+  fi
+
+  info "${C_BLD}Importing preferences${C_RST}"
+  info ""
+
+  local imported=0 failed=0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    base="$(basename "$f" .plist)"
+    d="$(printf '%s' "$base" | tr '_' '/')"
+    if ! plutil -lint "$f" >/dev/null 2>&1; then
+      warn "$d -- corrupt plist, skipping"
+      failed=$((failed + 1)); continue
+    fi
+    if [ "$DRY_RUN" -eq 1 ]; then
+      ok "$d ${C_DIM}(dry run)${C_RST}"
+      imported=$((imported + 1)); continue
+    fi
+    if defaults import "$d" "$f" 2>/dev/null; then
+      ok "$d"
+      imported=$((imported + 1))
+    else
+      warn "$d -- import failed"
+      failed=$((failed + 1))
+    fi
+  done <<EOF
+$plists
+EOF
+
+  if [ "$DRY_RUN" -eq 0 ]; then
+    killall cfprefsd       >/dev/null 2>&1 || true
+    killall Finder         >/dev/null 2>&1 || true
+    killall Dock           >/dev/null 2>&1 || true
+    killall SystemUIServer >/dev/null 2>&1 || true
+  fi
+
+  info ""
+  info "${C_BLD}$imported imported, $failed failed${C_RST}"
+  if [ "$DRY_RUN" -eq 0 ]; then
+    info ""
+    info "Log out and back in for everything to settle."
+    info "To undo:  ./macprefs.sh import \"$backup\" --yes"
+  fi
+}
+
+# ---------------------------------------------------------------- list / diff
+
+cmd_list() {
+  require_macos
+  local domains; domains="$(read_domains)"
+  local d present=0 absent=0
+  for d in $domains; do
+    if domain_exists "$d"; then ok "$d"; present=$((present + 1))
+    else skip "$d"; absent=$((absent + 1)); fi
+  done
+  info ""
+  info "${C_BLD}$present present, $absent not set${C_RST}"
+}
+
+cmd_diff() {
+  require_macos
+  local dir="${1:-}"
+  [ -n "$dir" ] && [ -d "$dir" ] || die "usage: $0 diff <export-folder>"
+  if [ ! -f "$dir/MANIFEST.txt" ] && [ -d "$dir/latest" ]; then dir="$dir/latest"; fi
+
+  MP_TMP="$(mktemp -d)"
+  trap 'rm -rf "${MP_TMP:-}"' EXIT
+  local tmp="$MP_TMP"
+
+  local f base d same=0 differ=0 missing=0
+  for f in "$dir"/*.plist; do
+    [ -e "$f" ] || continue
+    base="$(basename "$f" .plist)"
+    d="$(printf '%s' "$base" | tr '_' '/')"
+    if ! domain_exists "$d"; then
+      skip "$d ${C_DIM}(not set here)${C_RST}"; missing=$((missing + 1)); continue
+    fi
+    defaults export "$d" "$tmp/current.plist" 2>/dev/null || continue
+    # normalise both to XML so binary-vs-xml encoding is not reported as a change
+    plutil -convert xml1 "$tmp/current.plist" -o "$tmp/a.xml" 2>/dev/null || continue
+    plutil -convert xml1 "$f" -o "$tmp/b.xml" 2>/dev/null || continue
+    if diff -q "$tmp/a.xml" "$tmp/b.xml" >/dev/null 2>&1; then
+      ok "$d ${C_DIM}(identical)${C_RST}"; same=$((same + 1))
+    else
+      warn "$d differs"
+      diff "$tmp/a.xml" "$tmp/b.xml" | head -20 | sed 's/^/      /'
+      differ=$((differ + 1))
+    fi
+  done
+  info ""
+  info "${C_BLD}$same identical, $differ differ, $missing not set here${C_RST}"
+}
+
+# ---------------------------------------------------------------- arg parsing
+
+usage() {
+  cat <<'EOF'
+macprefs.sh -- carry macOS app preferences to a new Mac
+
+USAGE
+  ./macprefs.sh export [folder]     dump domains (default: ./macprefs-export)
+  ./macprefs.sh import <folder>     load them onto this Mac
+  ./macprefs.sh list                show which domains exist here
+  ./macprefs.sh diff <folder>       compare an export against this Mac
+
+OPTIONS
+  -n, --dry-run      show what would happen, change nothing
+  -y, --yes          skip confirmation prompts
+  -q, --quit-apps    quit affected apps automatically before importing
+  -c, --conf FILE    use a different domain list
+  -h, --help         this text
+
+TYPICAL USE
+  old Mac:   ./macprefs.sh export
+             # copy the macprefs-export folder to the new Mac (AirDrop, USB, ...)
+  new Mac:   ./macprefs.sh import macprefs-export/latest --quit-apps
+
+NOTES
+  Quit Photos, Safari and Mail before exporting -- a running app holds its
+  preferences in memory and the on-disk copy may lag behind what you see.
+
+  Import always saves a rollback copy to ~/.macprefs-rollback/<timestamp>.
+  Undo with:  ./macprefs.sh import ~/.macprefs-rollback/<timestamp> --yes
+
+  Not every setting lives in preferences. Photos album sort order, for one,
+  is partly held in the photo library database -- expect to set that by hand.
+
+  This moves settings, not data. Photos, Mail and Safari content comes from
+  iCloud or your own backup; this script only carries the knobs.
+EOF
+}
+
+main() {
+  local cmd="" arg1=""
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      -n|--dry-run)   DRY_RUN=1 ;;
+      -y|--yes)       ASSUME_YES=1 ;;
+      -q|--quit-apps) QUIT_APPS=1 ;;
+      -c|--conf)      shift; CONF="${1:-}" ;;
+      -h|--help)      usage; exit 0 ;;
+      -*)             die "unknown option: $1" ;;
+      *)              if [ -z "$cmd" ]; then cmd="$1"
+                      elif [ -z "$arg1" ]; then arg1="$1"; fi ;;
+    esac
+    shift
+  done
+
+  case "$cmd" in
+    export) cmd_export "$arg1" ;;
+    import) cmd_import "$arg1" ;;
+    list)   cmd_list ;;
+    diff)   cmd_diff "$arg1" ;;
+    "")     usage; exit 1 ;;
+    *)      die "unknown command: $cmd" ;;
+  esac
+}
+
+main "$@"
