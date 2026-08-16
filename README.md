@@ -2,29 +2,57 @@
 
 Carry macOS app preferences to a new Mac without Migration Assistant.
 
-Two files, no dependencies, runs on the stock `/bin/bash` that ships with macOS.
+iCloud syncs your *data*. It does not sync the per-device settings you spent
+years tuning — Finder view options, Dock behaviour, key repeat rate, Photos
+sort order, window layouts. Migration Assistant carries those, but only if you
+migrate. If you prefer a clean install, this script carries them instead.
 
-| File | What it is |
-|---|---|
-| `macprefs.sh` | the script |
-| `macprefs-domains.conf` | the list of apps to carry — edit this |
+No dependencies. Runs on the stock `/bin/bash` that ships with macOS.
 
-Keep both in the same folder.
+## Important: this repo holds the tool, not your settings
+
+Cloning this repo gets you a script. It does **not** get you any configuration —
+there is nothing machine-specific committed here, and there never will be.
+
+| | Lives where | In git? |
+|---|---|---|
+| The tool (`macprefs.sh`, `macprefs-domains.conf`) | this repo | yes |
+| Your actual settings (`macprefs-export/`) | produced when you run `export` | **no** — gitignored |
+
+Your settings only exist once you run the export, and they stay on your disk.
+`.gitignore` excludes `macprefs-export/` and any loose `*.plist` deliberately:
+preference files carry machine-specific traces — recent file paths, window
+positions, and for Mail and Calendar, account details and email addresses.
+
+The practical consequence: **the repo travels via GitHub, your settings do not.**
+You move the export folder to the new Mac yourself, by AirDrop or USB stick.
+
+(If you would rather have GitHub carry the settings too, delete the
+`macprefs-export/` and `*.plist` lines from `.gitignore` and commit the exports.
+Only sensible in a private repo, and re-read the paragraph above first.)
 
 ## Use
 
-On the **old** Mac — quit Photos, Safari and Mail first:
+### 1. On the old Mac — collect
+
+Quit Photos, Safari and Mail first.
 
 ```bash
 chmod +x macprefs.sh
+./macprefs.sh list          # optional: which of the listed apps have settings here
 ./macprefs.sh export
 ```
 
-That writes `macprefs-export/<timestamp>/`, one `.plist` per app, plus a
-`MANIFEST.txt` recording the macOS version it came from. Copy the whole
-`macprefs-export` folder to the new Mac — AirDrop, USB stick, whatever.
+That reads your live settings and writes `macprefs-export/<timestamp>/` — one
+`.plist` per app, plus a `MANIFEST.txt` recording the macOS version it came
+from. This folder is your configuration.
 
-On the **new** Mac:
+### 2. Move it across
+
+Copy the whole `macprefs-export` folder to the new Mac — AirDrop, USB stick,
+whatever you like. It is not in git, so cloning the repo will not bring it.
+
+### 3. On the new Mac — apply
 
 ```bash
 chmod +x macprefs.sh
@@ -32,6 +60,9 @@ chmod +x macprefs.sh
 ```
 
 Then log out and back in.
+
+Nothing is destroyed on the way: `import` snapshots the current state first,
+see [Undo](#undo).
 
 ## Commands
 
