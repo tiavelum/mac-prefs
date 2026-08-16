@@ -9,6 +9,14 @@
 #
 # Domains are read from macprefs-domains.conf next to this script.
 #
+# Some macOS settings -- Control Center and menu bar layout, Spotlight's menu
+# icon, per-device keyboard mappings -- are stored per-machine in the ByHost
+# domain (~/Library/Preferences/ByHost/), keyed by hardware UUID, and are only
+# reachable via `defaults -currentHost`. This script checks both locations for
+# every domain automatically. ByHost exports are saved as <domain>.byhost.plist
+# and re-imported with -currentHost, so they land under the NEW Mac's UUID.
+# Copying those files by hand would not work; importing them does.
+#
 # Import always writes a rollback backup of whatever it is about to overwrite,
 # so a bad import is one command away from being undone.
 #
@@ -55,9 +63,43 @@ read_domains() {
     | awk 'NF && !seen[$0]++'
 }
 
+# domain_exists <domain> [byhost]
 domain_exists() {
+  if [ "${2:-}" = "byhost" ]; then
+    defaults -currentHost read "$1" >/dev/null 2>&1
+    return $?
+  fi
   [ "$1" = "NSGlobalDomain" ] && return 0
   defaults read "$1" >/dev/null 2>&1
+}
+
+# do_export <domain> <outfile> [byhost]
+do_export() {
+  if [ "${3:-}" = "byhost" ]; then
+    defaults -currentHost export "$1" "$2" 2>/dev/null
+  else
+    defaults export "$1" "$2" 2>/dev/null
+  fi
+}
+
+# do_import <domain> <infile> [byhost]
+do_import() {
+  if [ "${3:-}" = "byhost" ]; then
+    defaults -currentHost import "$1" "$2" 2>/dev/null
+  else
+    defaults import "$1" "$2" 2>/dev/null
+  fi
+}
+
+# Turn an export filename into "<domain> <mode>".
+# com.apple.dock.plist              -> com.apple.dock
+# com.apple.controlcenter.byhost.plist -> com.apple.controlcenter byhost
+file_to_domain() {
+  local base; base="$(basename "$1" .plist)"
+  case "$base" in
+    *.byhost) printf '%s byhost\n' "$(printf '%s' "${base%.byhost}" | tr '_' '/')" ;;
+    *)        printf '%s\n'        "$(printf '%s' "$base"           | tr '_' '/')" ;;
+  esac
 }
 
 # domain -> application process name, for apps that must be quit before their
@@ -76,6 +118,10 @@ com.apple.Preview:Preview
 com.apple.TextEdit:TextEdit
 com.apple.ActivityMonitor:Activity Monitor
 "
+
+# UI processes restarted after an import so the new settings take effect.
+# ControlCenter owns the menu bar and Control Center layout on Big Sur and later.
+RESTARTABLE="cfprefsd Finder Dock SystemUIServer ControlCenter"
 
 # Args: domain list. Prints the names of affected apps that are running now.
 running_apps_for_domains() {
@@ -139,40 +185,57 @@ cmd_export() {
 
   [ "$DRY_RUN" -eq 1 ] || mkdir -p "$dir"
 
-  local exported=0 skipped=0 d safe
+  local exported=0 byhost=0 skipped=0 d safe got
   for d in $domains; do
-    if ! domain_exists "$d"; then
+    safe="$(printf '%s' "$d" | tr '/' '_')"
+    got=0
+
+    # 1. the ordinary domain
+    if domain_exists "$d"; then
+      if [ "$DRY_RUN" -eq 1 ]; then
+        ok "$d ${C_DIM}(dry run)${C_RST}"; got=1
+      elif do_export "$d" "$dir/$safe.plist"; then
+        ok "$d"; got=1
+      else
+        warn "$d -- export failed"
+      fi
+      [ "$got" -eq 1 ] && exported=$((exported + 1))
+    fi
+
+    # 2. the ByHost half, where Control Center and friends actually live
+    if domain_exists "$d" byhost; then
+      if [ "$DRY_RUN" -eq 1 ]; then
+        ok "$d ${C_DIM}(ByHost, dry run)${C_RST}"
+        byhost=$((byhost + 1)); got=1
+      elif do_export "$d" "$dir/$safe.byhost.plist" byhost; then
+        ok "$d ${C_DIM}(ByHost)${C_RST}"
+        byhost=$((byhost + 1)); got=1
+      else
+        warn "$d -- ByHost export failed"
+      fi
+    fi
+
+    if [ "$got" -eq 0 ]; then
       skip "$d ${C_DIM}(not set on this Mac)${C_RST}"
       skipped=$((skipped + 1))
-      continue
     fi
-    safe="$(printf '%s' "$d" | tr '/' '_')"
-    if [ "$DRY_RUN" -eq 1 ]; then
-      ok "$d ${C_DIM}(dry run)${C_RST}"
-    elif defaults export "$d" "$dir/$safe.plist" 2>/dev/null; then
-      ok "$d"
-    else
-      warn "$d -- export failed, skipping"
-      skipped=$((skipped + 1))
-      continue
-    fi
-    exported=$((exported + 1))
   done
 
   if [ "$DRY_RUN" -eq 0 ]; then
     {
-      echo "macprefs_version 1"
+      echo "macprefs_version 2"
       echo "exported_at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
       echo "source_host $(scutil --get ComputerName 2>/dev/null || hostname)"
       echo "macos_version $(sw_vers -productVersion)"
       echo "macos_build $(sw_vers -buildVersion)"
       echo "domain_count $exported"
+      echo "byhost_count $byhost"
     } > "$dir/MANIFEST.txt"
     ln -sfn "$stamp" "$out/latest"
   fi
 
   info ""
-  info "${C_BLD}$exported exported, $skipped skipped${C_RST}"
+  info "${C_BLD}$exported domains, $byhost ByHost, $skipped skipped${C_RST}"
   if [ "$DRY_RUN" -eq 0 ]; then
     info "Folder: $dir"
     info ""
@@ -207,8 +270,7 @@ cmd_import() {
     info ""
   fi
 
-  local plists=""
-  local f
+  local plists="" f
   for f in "$dir"/*.plist; do
     [ -e "$f" ] || continue
     plists="$plists$f
@@ -216,12 +278,12 @@ cmd_import() {
   done
   [ -n "$plists" ] || die "no .plist files found in $dir"
 
-  # Map filenames back to domain names.
-  local doms="" base d
+  # Collect plain domain names (without mode) for the running-app check.
+  local doms="" line d mode
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    base="$(basename "$f" .plist)"
-    doms="$doms $(printf '%s' "$base" | tr '_' '/')"
+    line="$(file_to_domain "$f")"
+    doms="$doms ${line%% *}"
   done <<EOF
 $plists
 EOF
@@ -252,13 +314,23 @@ EOF
     backup="$HOME/.macprefs-rollback/$(date +%Y-%m-%d-%H%M%S)"
     mkdir -p "$backup"
     local safe
-    for d in $doms; do
+    while IFS= read -r f; do
+      [ -n "$f" ] || continue
+      line="$(file_to_domain "$f")"
+      d="${line%% *}"
+      case "$line" in *" byhost") mode="byhost" ;; *) mode="" ;; esac
       safe="$(printf '%s' "$d" | tr '/' '_')"
-      if domain_exists "$d"; then
-        defaults export "$d" "$backup/$safe.plist" 2>/dev/null || true
+      if domain_exists "$d" "$mode"; then
+        if [ "$mode" = "byhost" ]; then
+          do_export "$d" "$backup/$safe.byhost.plist" byhost || true
+        else
+          do_export "$d" "$backup/$safe.plist" || true
+        fi
       fi
-    done
-    printf 'macprefs_version 1\nrollback_for %s\ncreated %s\n' \
+    done <<EOF
+$plists
+EOF
+    printf 'macprefs_version 2\nrollback_for %s\ncreated %s\n' \
       "$dir" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$backup/MANIFEST.txt"
     info "${C_DIM}rollback backup: $backup${C_RST}"
     info ""
@@ -267,21 +339,23 @@ EOF
   info "${C_BLD}Importing preferences${C_RST}"
   info ""
 
-  local imported=0 failed=0
+  local imported=0 failed=0 label
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    base="$(basename "$f" .plist)"
-    d="$(printf '%s' "$base" | tr '_' '/')"
+    line="$(file_to_domain "$f")"
+    d="${line%% *}"
+    case "$line" in *" byhost") mode="byhost"; label="$d ${C_DIM}(ByHost)${C_RST}" ;;
+                    *)          mode="";       label="$d" ;; esac
     if ! plutil -lint "$f" >/dev/null 2>&1; then
       warn "$d -- corrupt plist, skipping"
       failed=$((failed + 1)); continue
     fi
     if [ "$DRY_RUN" -eq 1 ]; then
-      ok "$d ${C_DIM}(dry run)${C_RST}"
+      ok "$label ${C_DIM}(dry run)${C_RST}"
       imported=$((imported + 1)); continue
     fi
-    if defaults import "$d" "$f" 2>/dev/null; then
-      ok "$d"
+    if do_import "$d" "$f" "$mode"; then
+      ok "$label"
       imported=$((imported + 1))
     else
       warn "$d -- import failed"
@@ -292,17 +366,16 @@ $plists
 EOF
 
   if [ "$DRY_RUN" -eq 0 ]; then
-    killall cfprefsd       >/dev/null 2>&1 || true
-    killall Finder         >/dev/null 2>&1 || true
-    killall Dock           >/dev/null 2>&1 || true
-    killall SystemUIServer >/dev/null 2>&1 || true
+    local p
+    for p in $RESTARTABLE; do killall "$p" >/dev/null 2>&1 || true; done
   fi
 
   info ""
   info "${C_BLD}$imported imported, $failed failed${C_RST}"
   if [ "$DRY_RUN" -eq 0 ]; then
     info ""
-    info "Log out and back in for everything to settle."
+    info "Menu bar and Control Center reload with ControlCenter; log out and"
+    info "back in for everything else to settle."
     info "To undo:  ./macprefs.sh import \"$backup\" --yes"
   fi
 }
@@ -312,13 +385,17 @@ EOF
 cmd_list() {
   require_macos
   local domains; domains="$(read_domains)"
-  local d present=0 absent=0
+  local d present=0 byhost=0 absent=0
   for d in $domains; do
-    if domain_exists "$d"; then ok "$d"; present=$((present + 1))
-    else skip "$d"; absent=$((absent + 1)); fi
+    local hit=0
+    if domain_exists "$d"; then ok "$d"; present=$((present + 1)); hit=1; fi
+    if domain_exists "$d" byhost; then
+      ok "$d ${C_DIM}(ByHost)${C_RST}"; byhost=$((byhost + 1)); hit=1
+    fi
+    [ "$hit" -eq 0 ] && { skip "$d"; absent=$((absent + 1)); }
   done
   info ""
-  info "${C_BLD}$present present, $absent not set${C_RST}"
+  info "${C_BLD}$present present, $byhost ByHost, $absent not set${C_RST}"
 }
 
 cmd_diff() {
@@ -331,22 +408,24 @@ cmd_diff() {
   trap 'rm -rf "${MP_TMP:-}"' EXIT
   local tmp="$MP_TMP"
 
-  local f base d same=0 differ=0 missing=0
+  local f line d mode label same=0 differ=0 missing=0
   for f in "$dir"/*.plist; do
     [ -e "$f" ] || continue
-    base="$(basename "$f" .plist)"
-    d="$(printf '%s' "$base" | tr '_' '/')"
-    if ! domain_exists "$d"; then
-      skip "$d ${C_DIM}(not set here)${C_RST}"; missing=$((missing + 1)); continue
+    line="$(file_to_domain "$f")"
+    d="${line%% *}"
+    case "$line" in *" byhost") mode="byhost"; label="$d ${C_DIM}(ByHost)${C_RST}" ;;
+                    *)          mode="";       label="$d" ;; esac
+    if ! domain_exists "$d" "$mode"; then
+      skip "$label ${C_DIM}(not set here)${C_RST}"; missing=$((missing + 1)); continue
     fi
-    defaults export "$d" "$tmp/current.plist" 2>/dev/null || continue
+    do_export "$d" "$tmp/current.plist" "$mode" || continue
     # normalise both to XML so binary-vs-xml encoding is not reported as a change
     plutil -convert xml1 "$tmp/current.plist" -o "$tmp/a.xml" 2>/dev/null || continue
     plutil -convert xml1 "$f" -o "$tmp/b.xml" 2>/dev/null || continue
     if diff -q "$tmp/a.xml" "$tmp/b.xml" >/dev/null 2>&1; then
-      ok "$d ${C_DIM}(identical)${C_RST}"; same=$((same + 1))
+      ok "$label ${C_DIM}(identical)${C_RST}"; same=$((same + 1))
     else
-      warn "$d differs"
+      warn "$label differs"
       diff "$tmp/a.xml" "$tmp/b.xml" | head -20 | sed 's/^/      /'
       differ=$((differ + 1))
     fi
@@ -378,6 +457,13 @@ TYPICAL USE
   old Mac:   ./macprefs.sh export
              # copy the macprefs-export folder to the new Mac (AirDrop, USB, ...)
   new Mac:   ./macprefs.sh import macprefs-export/latest --quit-apps
+
+BYHOST
+  Control Center and menu bar layout, Spotlight's menu icon and per-device
+  keyboard mappings live in the per-machine ByHost domain, keyed by hardware
+  UUID. Both halves of every domain are exported; ByHost ones are saved as
+  <domain>.byhost.plist and re-imported with -currentHost so they land under
+  the new Mac's UUID. Copying those files by hand does not work.
 
 NOTES
   Quit Photos, Safari and Mail before exporting -- a running app holds its

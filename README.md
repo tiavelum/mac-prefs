@@ -64,6 +64,27 @@ Then log out and back in.
 Nothing is destroyed on the way: `import` snapshots the current state first,
 see [Undo](#undo).
 
+## Menu bar, Control Center, and the ByHost catch
+
+Which icons sit in your menu bar, which are tucked into Control Center, and how
+both are arranged — that is carried too. So are notification settings, Stage
+Manager, screen saver, Spotlight's menu icon and per-device keyboard mappings.
+
+These need special handling. macOS stores some settings **per machine**, in
+`~/Library/Preferences/ByHost/`, in files keyed by the Mac's hardware UUID.
+Control Center is the big one. A plain `defaults export` cannot see them, and
+copying the files across by hand does not work either — the new Mac has a
+different UUID and ignores a file named for the old one.
+
+The script handles this for you. It checks both locations for every domain,
+saves ByHost settings as `<domain>.byhost.plist`, and re-imports them with
+`defaults -currentHost` so they land under the *new* Mac's UUID. `list` and
+`diff` mark them `(ByHost)` so you can see which is which. There is nothing
+to configure.
+
+After an import, `ControlCenter` is restarted along with Finder, Dock and
+SystemUIServer, so the menu bar redraws immediately.
+
 ## Commands
 
 ```
