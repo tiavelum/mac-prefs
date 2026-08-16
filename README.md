@@ -9,27 +9,80 @@ migrate. If you prefer a clean install, this script carries them instead.
 
 No dependencies. Runs on the stock `/bin/bash` that ships with macOS.
 
-## Important: this repo holds the tool, not your settings
+> Clone note: `macprefs.sh` and `install-snapshot-agent.sh` may arrive without
+> the executable bit. `chmod +x macprefs.sh install-snapshot-agent.sh` once.
+
+## This repo holds the tool, not your settings
 
 Cloning this repo gets you a script. It does **not** get you any configuration —
 there is nothing machine-specific committed here, and there never will be.
 
 | | Lives where | In git? |
 |---|---|---|
-| The tool (`macprefs.sh`, `macprefs-domains.conf`) | this repo | yes |
-| Your actual settings (`macprefs-export/`) | produced when you run `export` | **no** — gitignored |
+| The tool (`macprefs.sh`, `macprefs-domains.conf`) | this repo, public | yes |
+| Your actual settings | produced when you run `export` or `snapshot` | not here |
 
-Your settings only exist once you run the export, and they stay on your disk.
-`.gitignore` excludes `macprefs-export/` and any loose `*.plist` deliberately:
-preference files carry machine-specific traces — recent file paths, window
+`.gitignore` excludes `macprefs-export/` and any loose `*.plist` deliberately.
+Preference files carry machine-specific traces — recent file paths, window
 positions, and for Mail and Calendar, account details and email addresses.
+That is fine on your own disk and fine in a private repo. It is not fine here.
 
-The practical consequence: **the repo travels via GitHub, your settings do not.**
-You move the export folder to the new Mac yourself, by AirDrop or USB stick.
+So there are two ways to get settings from the old Mac to the new one.
 
-(If you would rather have GitHub carry the settings too, delete the
-`macprefs-export/` and `*.plist` lines from `.gitignore` and commit the exports.
-Only sensible in a private repo, and re-read the paragraph above first.)
+**One-off:** run `export`, move the folder by AirDrop or USB, run `import`.
+Nothing to set up. See [Use](#use).
+
+**Ongoing:** keep a *separate private repo* of your settings, updated on a
+schedule. Then a new Mac is two clones and one command, and you always have
+last week's state even if you forget to run anything. See below.
+
+## The two-repo setup
+
+```
+macprefs           public    the tool          ~/vc/macprefs
+macprefs-config    private   your settings     ~/vc/macprefs-config
+```
+
+The public repo feeds the private one. `snapshot` writes your current settings
+into `<private repo>/current/` and commits the change:
+
+```bash
+./macprefs.sh snapshot                      # defaults to ~/vc/macprefs-config
+./macprefs.sh snapshot ~/somewhere/else     # or point it anywhere
+```
+
+Three decisions worth knowing about:
+
+- **One `current/` folder, not timestamped ones.** Git already stores history;
+  timestamped folders would duplicate it and bloat the repo. Every past state
+  is a commit, recoverable with `git checkout <sha> -- current/`.
+- **Plists are converted to XML.** Binary plists are opaque to git — no useful
+  diffs, poor compression. As XML, `git log -p current/com.apple.dock.plist`
+  reads as a changelog of every Dock setting you ever touched.
+- **It commits but never pushes.** Pushing is a separate concern (git-autosync,
+  in my case), and a snapshot that can't reach the network should still be a
+  snapshot. Commits only happen when something actually changed, so quiet
+  weeks leave no empty history.
+
+### Run it on a schedule
+
+```bash
+./install-snapshot-agent.sh                     # weekly, Sunday 10:00
+./install-snapshot-agent.sh --daily --at 21:30
+./install-snapshot-agent.sh --uninstall
+```
+
+Installs a LaunchAgent. If the Mac is asleep at the scheduled moment, launchd
+runs the job on the next wake, so a closed laptop doesn't skip the week. Logs
+to `~/Library/Logs/macprefs-snapshot.log`.
+
+### Restore on a new Mac
+
+```bash
+git clone <this repo>            ~/vc/macprefs
+git clone <your private repo>    ~/vc/macprefs-config
+~/vc/macprefs/macprefs.sh import ~/vc/macprefs-config/current --quit-apps
+```
 
 ## Use
 
@@ -90,6 +143,7 @@ SystemUIServer, so the menu bar redraws immediately.
 ```
 ./macprefs.sh export [folder]     dump domains (default: ./macprefs-export)
 ./macprefs.sh import <folder>     load them onto this Mac
+./macprefs.sh snapshot [repo]     dump into a settings repo and commit
 ./macprefs.sh list                show which domains exist here
 ./macprefs.sh diff <folder>       compare an export against this Mac
 ```

@@ -27,6 +27,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 CONF="${MACPREFS_CONF:-$SCRIPT_DIR/macprefs-domains.conf}"
 DEFAULT_OUT="$SCRIPT_DIR/macprefs-export"
+DEFAULT_SNAPSHOT_DIR="$HOME/vc/macprefs-config"
 
 DRY_RUN=0
 ASSUME_YES=0
@@ -159,6 +160,74 @@ confirm() {
   case "$reply" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
 }
 
+# ---------------------------------------------------------------- export core
+
+MP_EXPORTED=0
+MP_BYHOST=0
+MP_SKIPPED=0
+
+# export_into <dir> <as_xml:0|1>
+# Walks the domain list, writing one plist per domain (plus a .byhost.plist
+# where a ByHost half exists). With as_xml=1 the plists are converted to XML,
+# which is what makes them diff cleanly in git.
+export_into() {
+  local dir="$1" as_xml="${2:-0}"
+  local domains; domains="$(read_domains)"
+  local d safe got
+
+  MP_EXPORTED=0; MP_BYHOST=0; MP_SKIPPED=0
+
+  for d in $domains; do
+    safe="$(printf '%s' "$d" | tr '/' '_')"
+    got=0
+
+    # 1. the ordinary domain
+    if domain_exists "$d"; then
+      if [ "$DRY_RUN" -eq 1 ]; then
+        ok "$d ${C_DIM}(dry run)${C_RST}"; got=1
+      elif do_export "$d" "$dir/$safe.plist"; then
+        [ "$as_xml" -eq 1 ] && plutil -convert xml1 "$dir/$safe.plist" >/dev/null 2>&1
+        ok "$d"; got=1
+      else
+        warn "$d -- export failed"
+      fi
+      [ "$got" -eq 1 ] && MP_EXPORTED=$((MP_EXPORTED + 1))
+    fi
+
+    # 2. the ByHost half, where Control Center and friends actually live
+    if domain_exists "$d" byhost; then
+      if [ "$DRY_RUN" -eq 1 ]; then
+        ok "$d ${C_DIM}(ByHost, dry run)${C_RST}"
+        MP_BYHOST=$((MP_BYHOST + 1)); got=1
+      elif do_export "$d" "$dir/$safe.byhost.plist" byhost; then
+        [ "$as_xml" -eq 1 ] && plutil -convert xml1 "$dir/$safe.byhost.plist" >/dev/null 2>&1
+        ok "$d ${C_DIM}(ByHost)${C_RST}"
+        MP_BYHOST=$((MP_BYHOST + 1)); got=1
+      else
+        warn "$d -- ByHost export failed"
+      fi
+    fi
+
+    if [ "$got" -eq 0 ]; then
+      skip "$d ${C_DIM}(not set on this Mac)${C_RST}"
+      MP_SKIPPED=$((MP_SKIPPED + 1))
+    fi
+  done
+}
+
+write_manifest() {
+  local dir="$1" exported="$2" byhost="$3"
+  {
+    echo "macprefs_version 2"
+    echo "exported_at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "source_host $(scutil --get ComputerName 2>/dev/null || hostname)"
+    echo "macos_version $(sw_vers -productVersion)"
+    echo "macos_build $(sw_vers -buildVersion)"
+    echo "domain_count $exported"
+    echo "byhost_count $byhost"
+  } > "$dir/MANIFEST.txt"
+}
+
 # ---------------------------------------------------------------- export
 
 cmd_export() {
@@ -185,52 +254,11 @@ cmd_export() {
 
   [ "$DRY_RUN" -eq 1 ] || mkdir -p "$dir"
 
-  local exported=0 byhost=0 skipped=0 d safe got
-  for d in $domains; do
-    safe="$(printf '%s' "$d" | tr '/' '_')"
-    got=0
-
-    # 1. the ordinary domain
-    if domain_exists "$d"; then
-      if [ "$DRY_RUN" -eq 1 ]; then
-        ok "$d ${C_DIM}(dry run)${C_RST}"; got=1
-      elif do_export "$d" "$dir/$safe.plist"; then
-        ok "$d"; got=1
-      else
-        warn "$d -- export failed"
-      fi
-      [ "$got" -eq 1 ] && exported=$((exported + 1))
-    fi
-
-    # 2. the ByHost half, where Control Center and friends actually live
-    if domain_exists "$d" byhost; then
-      if [ "$DRY_RUN" -eq 1 ]; then
-        ok "$d ${C_DIM}(ByHost, dry run)${C_RST}"
-        byhost=$((byhost + 1)); got=1
-      elif do_export "$d" "$dir/$safe.byhost.plist" byhost; then
-        ok "$d ${C_DIM}(ByHost)${C_RST}"
-        byhost=$((byhost + 1)); got=1
-      else
-        warn "$d -- ByHost export failed"
-      fi
-    fi
-
-    if [ "$got" -eq 0 ]; then
-      skip "$d ${C_DIM}(not set on this Mac)${C_RST}"
-      skipped=$((skipped + 1))
-    fi
-  done
+  export_into "$dir" 0
+  local exported="$MP_EXPORTED" byhost="$MP_BYHOST" skipped="$MP_SKIPPED"
 
   if [ "$DRY_RUN" -eq 0 ]; then
-    {
-      echo "macprefs_version 2"
-      echo "exported_at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
-      echo "source_host $(scutil --get ComputerName 2>/dev/null || hostname)"
-      echo "macos_version $(sw_vers -productVersion)"
-      echo "macos_build $(sw_vers -buildVersion)"
-      echo "domain_count $exported"
-      echo "byhost_count $byhost"
-    } > "$dir/MANIFEST.txt"
+    write_manifest "$dir" "$exported" "$byhost"
     ln -sfn "$stamp" "$out/latest"
   fi
 
@@ -241,6 +269,94 @@ cmd_export() {
     info ""
     info "Copy that folder to the new Mac, then run:"
     info "  ./macprefs.sh import <folder> --quit-apps"
+  fi
+}
+
+# ---------------------------------------------------------------- snapshot
+
+# Export into a settings repo and commit the result. Deliberately does NOT
+# push -- pushing is git-autosync's job, and a snapshot that fails to push
+# should still be a snapshot.
+#
+# Target resolution: argument, then $MACPREFS_SNAPSHOT_DIR, then the default.
+# Settings are written to <target>/current/, overwriting the previous state:
+# git already stores the history, so timestamped folders would only duplicate
+# it. Plists are converted to XML so `git log -p` reads as a changelog.
+cmd_snapshot() {
+  require_macos
+  local target="${1:-}"
+  [ -n "$target" ] || target="${MACPREFS_SNAPSHOT_DIR:-$DEFAULT_SNAPSHOT_DIR}"
+  # expand a leading ~
+  case "$target" in "~"/*) target="$HOME/${target#~/}" ;; esac
+
+  [ -d "$target" ] || die "settings repo not found: $target
+Clone it first, or pass the path:  $0 snapshot <path>"
+
+  local dir="$target/current"
+
+  info "${C_BLD}Snapshotting${C_RST} -> $dir"
+  info ""
+
+  local domains; domains="$(read_domains)"
+  local running; running="$(running_apps_for_domains $domains)"
+  if [ -n "$running" ]; then
+    warn "running apps may not have flushed current settings to disk:"
+    warn "  $(printf '%s' "$running" | tr '\n' ' ')"
+    info ""
+  fi
+
+  if [ "$DRY_RUN" -eq 0 ]; then
+    mkdir -p "$dir"
+    # clear stale files so a domain you removed from the config disappears
+    rm -f "$dir"/*.plist "$dir/MANIFEST.txt"
+  fi
+
+  export_into "$dir" 1
+
+  if [ "$DRY_RUN" -eq 1 ]; then
+    info ""
+    info "${C_BLD}$MP_EXPORTED domains, $MP_BYHOST ByHost, $MP_SKIPPED skipped ${C_DIM}(dry run)${C_RST}"
+    return 0
+  fi
+
+  write_manifest "$dir" "$MP_EXPORTED" "$MP_BYHOST"
+
+  info ""
+  info "${C_BLD}$MP_EXPORTED domains, $MP_BYHOST ByHost, $MP_SKIPPED skipped${C_RST}"
+
+  if [ ! -d "$target/.git" ]; then
+    warn "$target is not a git repository -- files written, nothing committed"
+    return 0
+  fi
+
+  # Commit only if something actually changed. MANIFEST.txt carries a
+  # timestamp that changes every run, so it cannot be the only thing staged.
+  local changed
+  changed="$(cd "$target" && git add -A >/dev/null 2>&1 && \
+             git diff --cached --name-only | grep -v '^current/MANIFEST.txt$' | wc -l | tr -d ' ')"
+
+  if [ "${changed:-0}" -eq 0 ]; then
+    # Only MANIFEST.txt moved, and only because it stamps the time. Put it
+    # back so the settings repo is left with a clean working tree.
+    ( cd "$target" \
+        && git reset -q \
+        && git checkout -- current/MANIFEST.txt 2>/dev/null ) || true
+    info ""
+    info "No settings changed since the last snapshot -- nothing committed."
+    return 0
+  fi
+
+  local host; host="$(scutil --get ComputerName 2>/dev/null || hostname)"
+  local msg="snapshot: $changed changed on $host
+
+$(cd "$target" && git diff --cached --name-only | sed 's/^current\///' | head -30)"
+
+  if ( cd "$target" && git commit -q -m "$msg" ); then
+    info ""
+    ok "committed $changed changed file(s) in $target"
+    info "${C_DIM}push happens via git-autosync${C_RST}"
+  else
+    warn "commit failed in $target"
   fi
 }
 
@@ -443,6 +559,7 @@ macprefs.sh -- carry macOS app preferences to a new Mac
 USAGE
   ./macprefs.sh export [folder]     dump domains (default: ./macprefs-export)
   ./macprefs.sh import <folder>     load them onto this Mac
+  ./macprefs.sh snapshot [repo]     dump into a settings repo and commit
   ./macprefs.sh list                show which domains exist here
   ./macprefs.sh diff <folder>       compare an export against this Mac
 
@@ -457,6 +574,21 @@ TYPICAL USE
   old Mac:   ./macprefs.sh export
              # copy the macprefs-export folder to the new Mac (AirDrop, USB, ...)
   new Mac:   ./macprefs.sh import macprefs-export/latest --quit-apps
+
+SNAPSHOT
+  `snapshot` keeps a private settings repo up to date. It writes into
+  <repo>/current/ -- overwriting the previous state, because git already
+  stores the history -- converts the plists to XML so `git log -p` reads as
+  a changelog, and commits only when something actually changed. It never
+  pushes; that is git-autosync's job.
+
+  Target: the argument, else $MACPREFS_SNAPSHOT_DIR, else ~/vc/macprefs-config
+
+  Restore on a new Mac:
+    ./macprefs.sh import ~/vc/macprefs-config/current --quit-apps
+
+  The settings repo holds account details and machine-specific paths.
+  Keep it private.
 
 BYHOST
   Control Center and menu bar layout, Spotlight's menu icon and per-device
@@ -497,12 +629,13 @@ main() {
   done
 
   case "$cmd" in
-    export) cmd_export "$arg1" ;;
-    import) cmd_import "$arg1" ;;
-    list)   cmd_list ;;
-    diff)   cmd_diff "$arg1" ;;
-    "")     usage; exit 1 ;;
-    *)      die "unknown command: $cmd" ;;
+    export)   cmd_export "$arg1" ;;
+    import)   cmd_import "$arg1" ;;
+    snapshot) cmd_snapshot "$arg1" ;;
+    list)     cmd_list ;;
+    diff)     cmd_diff "$arg1" ;;
+    "")       usage; exit 1 ;;
+    *)        die "unknown command: $cmd" ;;
   esac
 }
 
