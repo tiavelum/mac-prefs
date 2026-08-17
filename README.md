@@ -116,8 +116,10 @@ chmod +x macprefs.sh
 
 Then log out and back in.
 
-Nothing is destroyed on the way: `import` snapshots the current state first,
-see [Undo](#undo).
+`import` snapshots the current state before it overwrites anything, so a bad
+import can normally be undone — see [Undo](#undo). That backup is best-effort:
+a domain it cannot read is left out and the import carries on regardless. It
+says so when that happens, so read the warnings.
 
 ## Menu bar, Control Center, and the ByHost catch
 
@@ -142,18 +144,26 @@ SystemUIServer, so the menu bar redraws immediately.
 
 ## Protected domains — never captured
 
-Four domains are TCC-protected. `defaults` cannot read them from an ordinary
-Terminal, so they are **never exported and never imported**, no matter what the
-domain list says:
+Four domains are TCC-protected:
 
 ```
 com.apple.Safari        com.apple.mail
 com.apple.AddressBook   com.apple.Notes
 ```
 
-They will always show as missing in `list`, and their settings must be redone
-by hand on a new machine. `list` distinguishes "protected" from "not set on
-this Mac", so the two cases are told apart.
+`defaults` cannot **read** them from an ordinary Terminal. There is no special
+case for them anywhere in the script — they are treated like every other domain
+in the list; the read simply fails, and so they never make it into an export or
+a snapshot. Their settings have to be redone by hand on a new machine.
+
+`list` reports them the same way it reports a domain you never configured:
+absent. It does not tell "protected" apart from "not set on this Mac" — the
+four names above are how you know which case you are looking at.
+
+Import has no special case either: it imports whatever `.plist` files are in
+the folder. If one of these domains ever does turn up in an export — produced
+on a machine that had the access, or copied in by hand — it will be imported
+like any other.
 
 **Why Full Disk Access is not the answer.** Granting FDA to Terminal would fix
 a manual run but not the scheduled one: the LaunchAgent executes its
@@ -195,6 +205,19 @@ To roll back:
 ```bash
 ./macprefs.sh import ~/.macprefs-rollback/<timestamp> --yes
 ```
+
+The snapshot is best-effort, not a guarantee. A domain that cannot be read is
+reported by name and skipped, and the import continues — so the backup may not
+cover everything the import then replaces. To tell whether it was complete:
+
+```bash
+cat ~/.macprefs-rollback/<timestamp>/MANIFEST.txt
+```
+
+`incomplete 0` means every domain was saved. A higher number is followed by a
+`not_backed_up` line naming the domains the rollback does **not** restore.
+The import prints the same warning, and labels its closing undo hint
+`PARTIAL`.
 
 ## Adding apps
 

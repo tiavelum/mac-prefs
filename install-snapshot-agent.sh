@@ -42,7 +42,7 @@ while [ "$#" -gt 0 ]; do
                  HOUR="$((10#$HOUR))"; MINUTE="$((10#$MINUTE))" ;;
     --target)    shift; TARGET="${1:-}" ;;
     --uninstall) UNINSTALL=1 ;;
-    -h|--help)   sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help)   sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *)           die "unknown option: $1" ;;
   esac
   shift

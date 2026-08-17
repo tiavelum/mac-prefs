@@ -2,7 +2,7 @@
 #
 # macprefs.sh -- carry macOS app preferences to a new Mac without Migration Assistant.
 #
-#   ./macprefs.sh export              # on the OLD Mac: dump domains to ./macprefs-export
+#   ./macprefs.sh export              # on the OLD Mac: dump domains to macprefs-export/ next to this script
 #   ./macprefs.sh import <dir>        # on the NEW Mac: load them back
 #   ./macprefs.sh list                # show which domains exist on this Mac
 #   ./macprefs.sh diff <dir>          # compare an export against this Mac
@@ -17,8 +17,15 @@
 # and re-imported with -currentHost, so they land under the NEW Mac's UUID.
 # Copying those files by hand would not work; importing them does.
 #
-# Import always writes a rollback backup of whatever it is about to overwrite,
-# so a bad import is one command away from being undone.
+# Filenames are lossy in one direction: a `/` in a domain becomes `_` in the
+# export filename, and on import every `_` becomes `/` again. A domain that
+# already contains `_` therefore does not survive the round trip. Export warns
+# when it writes one; import such a domain by hand with `defaults import`.
+#
+# Import writes a rollback backup of whatever it is about to overwrite, so a
+# bad import is normally one command away from being undone. The backup is
+# best-effort: a domain that cannot be read is reported and left out, and the
+# backup's MANIFEST.txt records that it is incomplete.
 #
 # Written for the stock /bin/bash 3.2 that ships with macOS -- no bash 4 features.
 
@@ -165,6 +172,7 @@ confirm() {
 MP_EXPORTED=0
 MP_BYHOST=0
 MP_SKIPPED=0
+MP_FAILED=0
 
 # export_into <dir> <as_xml:0|1>
 # Walks the domain list, writing one plist per domain (plus a .byhost.plist
@@ -175,7 +183,7 @@ export_into() {
   local domains; domains="$(read_domains)"
   local d safe got
 
-  MP_EXPORTED=0; MP_BYHOST=0; MP_SKIPPED=0
+  MP_EXPORTED=0; MP_BYHOST=0; MP_SKIPPED=0; MP_FAILED=0
 
   for d in $domains; do
     safe="$(printf '%s' "$d" | tr '/' '_')"
@@ -190,6 +198,7 @@ export_into() {
         ok "$d"; got=1
       else
         warn "$d -- export failed"
+        MP_FAILED=$((MP_FAILED + 1))
       fi
       [ "$got" -eq 1 ] && MP_EXPORTED=$((MP_EXPORTED + 1))
     fi
@@ -205,12 +214,24 @@ export_into() {
         MP_BYHOST=$((MP_BYHOST + 1)); got=1
       else
         warn "$d -- ByHost export failed"
+        MP_FAILED=$((MP_FAILED + 1))
       fi
     fi
 
     if [ "$got" -eq 0 ]; then
       skip "$d ${C_DIM}(not set on this Mac)${C_RST}"
       MP_SKIPPED=$((MP_SKIPPED + 1))
+    fi
+
+    # `/` becomes `_` in the filename and every `_` becomes `/` again on
+    # import, so a domain that already contains `_` cannot round-trip.
+    if [ "$got" -eq 1 ]; then
+      case "$d" in
+        *_*)
+          warn "$d -- name does not round-trip: import would read $safe.plist back as '$(printf '%s' "$safe" | tr '_' '/')'."
+          warn "        Import this one by hand:  defaults import $d $dir/$safe.plist"
+          ;;
+      esac
     fi
   done
 }
@@ -255,7 +276,7 @@ cmd_export() {
   [ "$DRY_RUN" -eq 1 ] || mkdir -p "$dir"
 
   export_into "$dir" 0
-  local exported="$MP_EXPORTED" byhost="$MP_BYHOST" skipped="$MP_SKIPPED"
+  local exported="$MP_EXPORTED" byhost="$MP_BYHOST" skipped="$MP_SKIPPED" failed="$MP_FAILED"
 
   if [ "$DRY_RUN" -eq 0 ]; then
     write_manifest "$dir" "$exported" "$byhost"
@@ -263,13 +284,16 @@ cmd_export() {
   fi
 
   info ""
-  info "${C_BLD}$exported domains, $byhost ByHost, $skipped skipped${C_RST}"
+  info "${C_BLD}$exported domains, $byhost ByHost, $skipped skipped, $failed failed${C_RST}"
   if [ "$DRY_RUN" -eq 0 ]; then
     info "Folder: $dir"
     info ""
     info "Copy that folder to the new Mac, then run:"
     info "  ./macprefs.sh import <folder> --quit-apps"
   fi
+  # Exit non-zero on any failure: a wrapper (LaunchAgent, script) cannot
+  # otherwise tell a complete export from one that wrote almost nothing.
+  [ "$failed" -eq 0 ] || return 1
 }
 
 # ---------------------------------------------------------------- snapshot
@@ -312,52 +336,76 @@ Clone it first, or pass the path:  $0 snapshot <path>"
   fi
 
   export_into "$dir" 1
+  local failed="$MP_FAILED"
 
   if [ "$DRY_RUN" -eq 1 ]; then
     info ""
-    info "${C_BLD}$MP_EXPORTED domains, $MP_BYHOST ByHost, $MP_SKIPPED skipped ${C_DIM}(dry run)${C_RST}"
+    info "${C_BLD}$MP_EXPORTED domains, $MP_BYHOST ByHost, $MP_SKIPPED skipped, $failed failed ${C_DIM}(dry run)${C_RST}"
+    [ "$failed" -eq 0 ] || return 1
     return 0
   fi
 
   write_manifest "$dir" "$MP_EXPORTED" "$MP_BYHOST"
 
   info ""
-  info "${C_BLD}$MP_EXPORTED domains, $MP_BYHOST ByHost, $MP_SKIPPED skipped${C_RST}"
+  info "${C_BLD}$MP_EXPORTED domains, $MP_BYHOST ByHost, $MP_SKIPPED skipped, $failed failed${C_RST}"
+  [ "$failed" -eq 0 ] || warn "this snapshot is incomplete -- $failed domain(s) could not be exported"
 
   if [ ! -d "$target/.git" ]; then
     warn "$target is not a git repository -- files written, nothing committed"
+    [ "$failed" -eq 0 ] || return 1
     return 0
+  fi
+
+  # `git add` gets its own exit status. Folded into the command substitution
+  # below, a locked index or a permissions problem looked exactly like a clean
+  # tree, and the freshly written plists were then left uncommitted while the
+  # run reported "nothing changed".
+  # Staging is scoped to current/: this command owns that directory and
+  # nothing else in the settings repo.
+  local add_err add_rc
+  add_err="$(cd "$target" && git add -A -- current 2>&1)"; add_rc=$?
+  if [ "$add_rc" -ne 0 ]; then
+    warn "git add failed in $target (exit $add_rc) -- settings written but NOT committed"
+    [ -n "$add_err" ] && warn "  $add_err"
+    return 1
   fi
 
   # Commit only if something actually changed. MANIFEST.txt carries a
   # timestamp that changes every run, so it cannot be the only thing staged.
   local changed
-  changed="$(cd "$target" && git add -A >/dev/null 2>&1 && \
-             git diff --cached --name-only | grep -v '^current/MANIFEST.txt$' | wc -l | tr -d ' ')"
+  changed="$(cd "$target" && git diff --cached --name-only -- current \
+             | grep -v '^current/MANIFEST.txt$' | wc -l | tr -d ' ')"
 
   if [ "${changed:-0}" -eq 0 ]; then
     # Only MANIFEST.txt moved, and only because it stamps the time. Put it
-    # back so the settings repo is left with a clean working tree.
+    # back so the settings repo is left as it was found -- unstaging current/
+    # only, so work the user had staged elsewhere stays staged.
     ( cd "$target" \
-        && git reset -q \
+        && git reset -q -- current \
         && git checkout -- current/MANIFEST.txt 2>/dev/null ) || true
     info ""
     info "No settings changed since the last snapshot -- nothing committed."
+    [ "$failed" -eq 0 ] || return 1
     return 0
   fi
 
   local host; host="$(scutil --get ComputerName 2>/dev/null || hostname)"
   local msg="snapshot: $changed changed on $host
 
-$(cd "$target" && git diff --cached --name-only | sed 's/^current\///' | head -30)"
+$(cd "$target" && git diff --cached --name-only -- current | sed 's/^current\///' | head -30)"
 
-  if ( cd "$target" && git commit -q -m "$msg" ); then
+  # Scoped to current/ for the same reason as the staging above.
+  if ( cd "$target" && git commit -q -m "$msg" -- current ); then
     info ""
     ok "committed $changed changed file(s) in $target"
     info "${C_DIM}push happens via git-autosync${C_RST}"
   else
     warn "commit failed in $target"
+    return 1
   fi
+
+  [ "$failed" -eq 0 ] || return 1
 }
 
 # ---------------------------------------------------------------- import
@@ -425,7 +473,10 @@ EOF
   fi
 
   # Rollback snapshot of current state, taken before anything is touched.
-  local backup=""
+  # Best-effort: a domain that cannot be read (TCC, permissions) is counted
+  # and named rather than silently dropped -- the undo command below cannot
+  # restore what was never saved.
+  local backup="" backup_failed=0 backup_missed=""
   if [ "$DRY_RUN" -eq 0 ]; then
     backup="$HOME/.macprefs-rollback/$(date +%Y-%m-%d-%H%M%S)"
     mkdir -p "$backup"
@@ -438,17 +489,27 @@ EOF
       safe="$(printf '%s' "$d" | tr '/' '_')"
       if domain_exists "$d" "$mode"; then
         if [ "$mode" = "byhost" ]; then
-          do_export "$d" "$backup/$safe.byhost.plist" byhost || true
+          do_export "$d" "$backup/$safe.byhost.plist" byhost || {
+            backup_failed=$((backup_failed + 1)); backup_missed="$backup_missed $d(ByHost)"; }
         else
-          do_export "$d" "$backup/$safe.plist" || true
+          do_export "$d" "$backup/$safe.plist" || {
+            backup_failed=$((backup_failed + 1)); backup_missed="$backup_missed $d"; }
         fi
       fi
     done <<EOF
 $plists
 EOF
-    printf 'macprefs_version 2\nrollback_for %s\ncreated %s\n' \
-      "$dir" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "$backup/MANIFEST.txt"
-    info "${C_DIM}rollback backup: $backup${C_RST}"
+    printf 'macprefs_version 2\nrollback_for %s\ncreated %s\nincomplete %s\n' \
+      "$dir" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$backup_failed" > "$backup/MANIFEST.txt"
+    if [ "$backup_failed" -gt 0 ]; then
+      printf 'not_backed_up%s\n' "$backup_missed" >> "$backup/MANIFEST.txt"
+      warn "rollback backup is INCOMPLETE -- $backup_failed domain(s) could not be read:"
+      warn "  ${backup_missed# }"
+      warn "the undo command shown at the end will NOT restore those domains."
+      info "${C_DIM}rollback backup (PARTIAL): $backup${C_RST}"
+    else
+      info "${C_DIM}rollback backup: $backup${C_RST}"
+    fi
     info ""
   fi
 
@@ -492,8 +553,16 @@ EOF
     info ""
     info "Menu bar and Control Center reload with ControlCenter; log out and"
     info "back in for everything else to settle."
-    info "To undo:  ./macprefs.sh import \"$backup\" --yes"
+    if [ "$backup_failed" -gt 0 ]; then
+      info "To undo (PARTIAL -- $backup_failed domain(s) were not backed up):"
+      info "  ./macprefs.sh import \"$backup\" --yes"
+    else
+      info "To undo:  ./macprefs.sh import \"$backup\" --yes"
+    fi
   fi
+  # Non-zero when anything failed, so a wrapper can tell an import that
+  # worked from one that imported nothing at all.
+  [ "$failed" -eq 0 ] || return 1
 }
 
 # ---------------------------------------------------------------- list / diff
@@ -557,7 +626,8 @@ usage() {
 macprefs.sh -- carry macOS app preferences to a new Mac
 
 USAGE
-  ./macprefs.sh export [folder]     dump domains (default: ./macprefs-export)
+  ./macprefs.sh export [folder]     dump domains
+                                    (default: macprefs-export/ next to this script)
   ./macprefs.sh import <folder>     load them onto this Mac
   ./macprefs.sh snapshot [repo]     dump into a settings repo and commit
   ./macprefs.sh list                show which domains exist here
@@ -601,8 +671,11 @@ NOTES
   Quit Photos, Safari and Mail before exporting -- a running app holds its
   preferences in memory and the on-disk copy may lag behind what you see.
 
-  Import always saves a rollback copy to ~/.macprefs-rollback/<timestamp>.
+  Import saves a rollback copy to ~/.macprefs-rollback/<timestamp> first.
   Undo with:  ./macprefs.sh import ~/.macprefs-rollback/<timestamp> --yes
+  The copy is best-effort: a domain that cannot be read is named in a warning
+  and left out, and the copy's MANIFEST.txt then says `incomplete <n>` and
+  lists the domains it does not cover.
 
   Not every setting lives in preferences. Photos album sort order, for one,
   is partly held in the photo library database -- expect to set that by hand.
