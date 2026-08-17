@@ -88,8 +88,6 @@ git clone <your private repo>    ~/vc/macprefs-config
 
 ### 1. On the old Mac — collect
 
-Quit Photos, Safari and Mail first.
-
 ```bash
 chmod +x macprefs.sh
 ./macprefs.sh list          # optional: which of the listed apps have settings here
@@ -99,6 +97,10 @@ chmod +x macprefs.sh
 That reads your live settings and writes `macprefs-export/<timestamp>/` — one
 `.plist` per app, plus a `MANIFEST.txt` recording the macOS version it came
 from. This folder is your configuration.
+
+Quitting apps matters on **import**, not here — see [Caveats](#caveats). Safari,
+Mail, Contacts and Notes are a separate matter: they are never captured at all,
+see [Protected domains](#protected-domains--never-captured).
 
 ### 2. Move it across
 
@@ -137,6 +139,32 @@ to configure.
 
 After an import, `ControlCenter` is restarted along with Finder, Dock and
 SystemUIServer, so the menu bar redraws immediately.
+
+## Protected domains — never captured
+
+Four domains are TCC-protected. `defaults` cannot read them from an ordinary
+Terminal, so they are **never exported and never imported**, no matter what the
+domain list says:
+
+```
+com.apple.Safari        com.apple.mail
+com.apple.AddressBook   com.apple.Notes
+```
+
+They will always show as missing in `list`, and their settings must be redone
+by hand on a new machine. `list` distinguishes "protected" from "not set on
+this Mac", so the two cases are told apart.
+
+**Why Full Disk Access is not the answer.** Granting FDA to Terminal would fix
+a manual run but not the scheduled one: the LaunchAgent executes its
+interpreter directly, so the grant would have to go to that interpreter — a far
+broader permission than these few settings are worth. The trade is deliberately
+declined.
+
+**One false positive to know about.** `com.apple.Safari.SandboxBroker` *is*
+captured and appears in an export next to the real domains. It looks like
+Safari's settings and is not — seeing it is no evidence that `com.apple.Safari`
+came across.
 
 ## Commands
 
@@ -192,6 +220,8 @@ you'd otherwise reconstruct by clicking through menus.
   backup. This carries the knobs, not the contents.
 - **Credentials.** Passwords and tokens live in Keychain, not preferences.
   Use iCloud Keychain or migrate the keychain separately.
+- **The four TCC-protected domains.** Safari, Mail, Contacts and Notes
+  preferences — see above. Redone by hand.
 - **Settings that aren't preferences.** Some app state lives in an app's own
   database. Photos album sort order is a known example — it's partly in the
   photo library, so expect to set that one by hand.
