@@ -122,6 +122,16 @@ else
     || die "could not load the agent -- check $PLIST"
 fi
 
+# Verify the effect, not the call. bootstrap can return 0 and the job still
+# not be running, and the old label can survive a failed bootout. Read back
+# what launchd actually holds and fail if it is not exactly one agent, ours.
+if launchctl list | grep -q "$OLD_LABEL"; then
+  die "the pre-rename agent $OLD_LABEL is still loaded -- run: launchctl bootout gui/$UID/$OLD_LABEL"
+fi
+launchctl list | grep -q "$LABEL" \
+  || die "$LABEL was installed but is not running -- check $PLIST"
+ok "verified: $LABEL is the only snapshot agent loaded"
+
 ok "snapshots $WHEN into $TARGET"
 printf '      log: %s\n' "$LOG"
 printf '      run now:    launchctl kickstart -k gui/%s/%s\n' "$UID" "$LABEL"
