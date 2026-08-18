@@ -2,81 +2,47 @@
 
 Carry macOS app preferences to a new Mac without Migration Assistant.
 
-iCloud syncs your *data*. It does not sync the per-device settings you spent
-years tuning — Finder view options, Dock behaviour, key repeat rate, Photos
-sort order, window layouts. Migration Assistant carries those, but only if you
-migrate. If you prefer a clean install, this script carries them instead.
-
-No dependencies. Runs on the stock `/bin/bash` that ships with macOS.
-
-> Clone note: `mac-prefs.sh` and `install-snapshot-agent.sh` may arrive without
-> the executable bit. `chmod +x mac-prefs.sh install-snapshot-agent.sh` once.
-
-## This repo holds the tool, not your settings
-
-Cloning this repo gets you a script. It does **not** get you any configuration —
-there is nothing machine-specific committed here, and there never will be.
-
-| | Lives where | In git? |
-|---|---|---|
-| The tool (`mac-prefs.sh`, `mac-prefs-domains.conf`) | this repo, public | yes |
-| Your actual settings | produced when you run `export` or `snapshot` | not here |
-
-`.gitignore` excludes `mac-prefs-export/` and any loose `*.plist` deliberately.
-Preference files carry machine-specific traces — recent file paths, window
-positions, and for Mail and Calendar, account details and email addresses.
-That is fine on your own disk and fine in a private repo. It is not fine here.
-
-So there are two ways to get settings from the old Mac to the new one.
-
-**One-off:** run `export`, move the folder by AirDrop or USB, run `import`.
-Nothing to set up. See [Use](#use).
-
-**Ongoing:** keep a *separate private repo* of your settings, updated on a
-schedule. Then a new Mac is two clones and one command, and you always have
-last week's state even if you forget to run anything. See below.
-
-## The two-repo setup
+iCloud syncs your *data*; it does not sync the per-device settings you spent
+years tuning — Finder view options, Dock behaviour, key repeat, menu bar and
+Control Center layout, notification settings, per-app options. This script
+exports them from the old Mac and imports them on the new one. Stock
+`/bin/bash`, no dependencies.
 
 ```
-mac-prefs           public    the tool          ~/vc/mac-prefs
-mac-prefs-config    private   your settings     ~/vc/mac-prefs-config
+./mac-prefs.sh export [folder]     dump the listed domains
+./mac-prefs.sh import <folder>     load them onto this Mac
+./mac-prefs.sh snapshot [repo]     dump into a settings repo and commit
+./mac-prefs.sh list                which listed domains exist on this Mac
+./mac-prefs.sh diff <folder>       compare an export against this Mac
 ```
 
-The public repo feeds the private one. `snapshot` writes your current settings
-into `<private repo>/current/` and commits the change:
+Options: `-n/--dry-run`, `-y/--yes`, `-q/--quit-apps`, `-c/--conf FILE`,
+`-h/--help` (the full text). Which apps are covered is
+`mac-prefs-domains.conf`, one preference domain per line; find an app's with
+`defaults domains | tr ',' '\n' | grep -i <name>`.
 
-```bash
-./mac-prefs.sh snapshot                      # defaults to ~/vc/mac-prefs-config
-./mac-prefs.sh snapshot ~/somewhere/else     # or point it anywhere
+## Two ways to move settings
+
+**One-off:** on the old Mac `./mac-prefs.sh export`, copy the
+`mac-prefs-export` folder across (AirDrop, USB), on the new Mac
+`./mac-prefs.sh import mac-prefs-export/latest --quit-apps`, log out and in.
+
+**Ongoing:** keep a *private* settings repo that `snapshot` updates —
+this repo holds the tool, never your settings, because preference files
+carry account identifiers, recent paths and the machine name.
+
+```
+mac-prefs           public    the tool
+mac-prefs-config    private   your settings, folder current/
 ```
 
-Three decisions worth knowing about:
+`snapshot` writes into `<repo>/current/` (git is the history — no
+timestamped folders), stores plists as XML so `git log -p` reads as a
+changelog, commits only when something changed, and never pushes. Run it on
+a schedule with `./install-snapshot-agent.sh` (weekly, Sunday 10:00;
+`--daily`, `--at HH:MM`, `--uninstall`; a sleeping Mac runs it on wake).
 
-- **One `current/` folder, not timestamped ones.** Git already stores history;
-  timestamped folders would duplicate it and bloat the repo. Every past state
-  is a commit, recoverable with `git checkout <sha> -- current/`.
-- **Plists are converted to XML.** Binary plists are opaque to git — no useful
-  diffs, poor compression. As XML, `git log -p current/com.apple.dock.plist`
-  reads as a changelog of every Dock setting you ever touched.
-- **It commits but never pushes.** Pushing is a separate concern (git-autosync,
-  in my case), and a snapshot that can't reach the network should still be a
-  snapshot. Commits only happen when something actually changed, so quiet
-  weeks leave no empty history.
-
-### Run it on a schedule
-
-```bash
-./install-snapshot-agent.sh                     # weekly, Sunday 10:00
-./install-snapshot-agent.sh --daily --at 21:30
-./install-snapshot-agent.sh --uninstall
-```
-
-Installs a LaunchAgent. If the Mac is asleep at the scheduled moment, launchd
-runs the job on the next wake, so a closed laptop doesn't skip the week. Logs
-to `~/Library/Logs/mac-prefs-snapshot.log`.
-
-### Restore on a new Mac
+Restore on a new Mac:
 
 ```bash
 git clone <this repo>            ~/vc/mac-prefs
@@ -84,190 +50,30 @@ git clone <your private repo>    ~/vc/mac-prefs-config
 ~/vc/mac-prefs/mac-prefs.sh import ~/vc/mac-prefs-config/current --quit-apps
 ```
 
-## Use
+## What to know before importing
 
-### 1. On the old Mac — collect
+- **Quit the apps** (`--quit-apps`). A running app writes its in-memory
+  preferences out on exit, over whatever you just imported — the most
+  common reason an import seems to do nothing.
+- **Import replaces a domain wholesale.** Right on a fresh Mac; on a
+  customised one run `diff` first.
+- **Every import writes a rollback** to `~/.mac-prefs-rollback/<timestamp>/`
+  first; undo with `./mac-prefs.sh import <that folder> --yes`. The rollback
+  is best-effort — its `MANIFEST.txt` names any domain it could not read.
+- Finder, Dock, SystemUIServer and Control Center restart at the end.
+- Per-machine (ByHost) settings — Control Center and menu bar layout among
+  them — are handled automatically; the script re-imports them under the new
+  Mac's hardware UUID.
 
-```bash
-chmod +x mac-prefs.sh
-./mac-prefs.sh list          # optional: which of the listed apps have settings here
-./mac-prefs.sh export
-```
+## What it does not carry
 
-That reads your live settings and writes `mac-prefs-export/<timestamp>/` — one
-`.plist` per app, plus a `MANIFEST.txt` recording the macOS version it came
-from. This folder is your configuration.
-
-Quitting apps matters on **import**, not here — see [Caveats](#caveats). Safari,
-Mail, Contacts and Notes are a separate matter: they are never captured at all,
-see [Protected domains](#protected-domains--never-captured).
-
-### 2. Move it across
-
-Copy the whole `mac-prefs-export` folder to the new Mac — AirDrop, USB stick,
-whatever you like. It is not in git, so cloning the repo will not bring it.
-
-### 3. On the new Mac — apply
-
-```bash
-chmod +x mac-prefs.sh
-./mac-prefs.sh import mac-prefs-export/latest --quit-apps
-```
-
-Then log out and back in.
-
-`import` snapshots the current state before it overwrites anything, so a bad
-import can normally be undone — see [Undo](#undo). That backup is best-effort:
-a domain it cannot read is left out and the import carries on regardless. It
-says so when that happens, so read the warnings.
-
-## Menu bar, Control Center, and the ByHost catch
-
-Which icons sit in your menu bar, which are tucked into Control Center, and how
-both are arranged — that is carried too. So are notification settings, Stage
-Manager, screen saver, Spotlight's menu icon and per-device keyboard mappings.
-
-These need special handling. macOS stores some settings **per machine**, in
-`~/Library/Preferences/ByHost/`, in files keyed by the Mac's hardware UUID.
-Control Center is the big one. A plain `defaults export` cannot see them, and
-copying the files across by hand does not work either — the new Mac has a
-different UUID and ignores a file named for the old one.
-
-The script handles this for you. It checks both locations for every domain,
-saves ByHost settings as `<domain>.byhost.plist`, and re-imports them with
-`defaults -currentHost` so they land under the *new* Mac's UUID. `list` and
-`diff` mark them `(ByHost)` so you can see which is which. There is nothing
-to configure.
-
-After an import, `ControlCenter` is restarted along with Finder, Dock and
-SystemUIServer, so the menu bar redraws immediately.
-
-## Protected domains — never captured
-
-Four domains are TCC-protected:
-
-```
-com.apple.Safari        com.apple.mail
-com.apple.AddressBook   com.apple.Notes
-```
-
-`defaults` cannot **read** them from an ordinary Terminal. There is no special
-case for them anywhere in the script — they are treated like every other domain
-in the list; the read simply fails, and so they never make it into an export or
-a snapshot. Their settings have to be redone by hand on a new machine.
-
-`list` reports them the same way it reports a domain you never configured:
-absent. It does not tell "protected" apart from "not set on this Mac" — the
-four names above are how you know which case you are looking at.
-
-Import has no special case either: it imports whatever `.plist` files are in
-the folder. If one of these domains ever does turn up in an export — produced
-on a machine that had the access, or copied in by hand — it will be imported
-like any other.
-
-**Why Full Disk Access is not the answer.** Granting FDA to Terminal would fix
-a manual run but not the scheduled one: the LaunchAgent executes its
-interpreter directly, so the grant would have to go to that interpreter — a far
-broader permission than these few settings are worth. The trade is deliberately
-declined.
-
-**One false positive to know about.** `com.apple.Safari.SandboxBroker` *is*
-captured and appears in an export next to the real domains. It looks like
-Safari's settings and is not — seeing it is no evidence that `com.apple.Safari`
-came across.
-
-## Commands
-
-```
-./mac-prefs.sh export [folder]     dump domains (default: ./mac-prefs-export)
-./mac-prefs.sh import <folder>     load them onto this Mac
-./mac-prefs.sh snapshot [repo]     dump into a settings repo and commit
-./mac-prefs.sh list                show which domains exist here
-./mac-prefs.sh diff <folder>       compare an export against this Mac
-```
-
-Options: `-n/--dry-run`, `-y/--yes`, `-q/--quit-apps`, `-c/--conf FILE`, `-h/--help`
-
-`list` is the useful one to run first — it tells you which of the domains in
-your config file actually exist on the source Mac, so you're not surprised by
-what does and doesn't come across.
-
-## Undo
-
-Every import first snapshots what it is about to overwrite:
-
-```
-~/.mac-prefs-rollback/<timestamp>/
-```
-
-To roll back:
-
-```bash
-./mac-prefs.sh import ~/.mac-prefs-rollback/<timestamp> --yes
-```
-
-The snapshot is best-effort, not a guarantee. A domain that cannot be read is
-reported by name and skipped, and the import continues — so the backup may not
-cover everything the import then replaces. To tell whether it was complete:
-
-```bash
-cat ~/.mac-prefs-rollback/<timestamp>/MANIFEST.txt
-```
-
-`incomplete 0` means every domain was saved. A higher number is followed by a
-`not_backed_up` line naming the domains the rollback does **not** restore.
-The import prints the same warning, and labels its closing undo hint
-`PARTIAL`.
-
-## Adding apps
-
-Edit `mac-prefs-domains.conf`. One preference domain per line; `#` comments and
-blank lines are ignored. Domains that don't exist on the source Mac are skipped
-with a note rather than treated as errors, so an over-broad list is harmless.
-
-To find an app's domain:
-
-```bash
-defaults domains | tr ',' '\n' | grep -i spotify
-```
-
-## What this does and doesn't move
-
-**Does:** view preferences, window and toolbar layouts, sort orders, keyboard
-and trackpad tuning, Finder and Dock behaviour, per-app options — the settings
-you'd otherwise reconstruct by clicking through menus.
-
-**Doesn't:**
-
-- **Data.** Photos, Mail and Safari content comes from iCloud or your own
-  backup. This carries the knobs, not the contents.
-- **Credentials.** Passwords and tokens live in Keychain, not preferences.
-  Use iCloud Keychain or migrate the keychain separately.
-- **The four TCC-protected domains.** Safari, Mail, Contacts and Notes
-  preferences — see above. Redone by hand.
-- **Settings that aren't preferences.** Some app state lives in an app's own
-  database. Photos album sort order is a known example — it's partly in the
-  photo library, so expect to set that one by hand.
-- **Anything requiring Full Disk Access or MDM.** Out of scope by design.
-
-## Caveats
-
-**Quit the apps.** A running app holds its preferences in memory and writes
-them out when it exits — over whatever you just imported. The script warns
-you and `--quit-apps` handles it, but this is the single most common way to
-end up wondering why nothing took effect.
-
-**Version gaps.** Importing across a major macOS version can carry keys the
-new version no longer understands. Usually harmless; the rollback backup is
-there if it isn't. The script warns when the versions differ.
-
-**Finder, Dock and SystemUIServer restart** at the end of an import. Expected,
-takes a second, nothing is lost.
-
-**`defaults import` replaces a domain wholesale.** It does not merge. That is
-what you want when setting up a fresh Mac; it is not what you want on a Mac
-you have already customised. Use `diff` first in that case.
-
-## License
+Data (that is iCloud's job), credentials (Keychain), app state kept in an
+app's own database (Photos album sort order), anything needing Full Disk
+Access — and four TCC-protected domains that `defaults` cannot read from a
+Terminal: **Safari, Mail, Contacts, Notes**. Those are silently absent from
+every export and are redone by hand. (`com.apple.Safari.SandboxBroker` *is*
+captured and is not Safari's settings.) Granting Full Disk Access is
+deliberately not the answer: it would have to go to the interpreter the
+scheduled agent runs, far broader than these settings are worth.
 
 MIT — see `LICENSE`.
