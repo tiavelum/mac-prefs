@@ -358,9 +358,9 @@ Clone it first, or pass the path:  $0 snapshot <path>"
   fi
 
   # `git add` gets its own exit status. Folded into the command substitution
-  # below, a locked index or a permissions problem looked exactly like a clean
-  # tree, and the freshly written plists were then left uncommitted while the
-  # run reported "nothing changed".
+  # below, a locked index or a permissions problem looks exactly like a clean
+  # tree, and the freshly written plists are left uncommitted while the run
+  # reports "nothing changed".
   # Staging is scoped to current/: this command owns that directory and
   # nothing else in the settings repo.
   local add_err add_rc
