@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 #
-# macprefs.sh -- carry macOS app preferences to a new Mac without Migration Assistant.
+# mac-prefs.sh -- carry macOS app preferences to a new Mac without Migration Assistant.
 #
-#   ./macprefs.sh export              # on the OLD Mac: dump domains to macprefs-export/ next to this script
-#   ./macprefs.sh import <dir>        # on the NEW Mac: load them back
-#   ./macprefs.sh list                # show which domains exist on this Mac
-#   ./macprefs.sh diff <dir>          # compare an export against this Mac
+#   ./mac-prefs.sh export              # on the OLD Mac: dump domains to mac-prefs-export/ next to this script
+#   ./mac-prefs.sh import <dir>        # on the NEW Mac: load them back
+#   ./mac-prefs.sh list                # show which domains exist on this Mac
+#   ./mac-prefs.sh diff <dir>          # compare an export against this Mac
 #
-# Domains are read from macprefs-domains.conf next to this script.
+# Domains are read from mac-prefs-domains.conf next to this script.
 #
 # Some macOS settings -- Control Center and menu bar layout, Spotlight's menu
 # icon, per-device keyboard mappings -- are stored per-machine in the ByHost
@@ -32,9 +32,9 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-CONF="${MACPREFS_CONF:-$SCRIPT_DIR/macprefs-domains.conf}"
-DEFAULT_OUT="$SCRIPT_DIR/macprefs-export"
-DEFAULT_SNAPSHOT_DIR="$HOME/vc/macprefs-config"
+CONF="${MACPREFS_CONF:-$SCRIPT_DIR/mac-prefs-domains.conf}"
+DEFAULT_OUT="$SCRIPT_DIR/mac-prefs-export"
+DEFAULT_SNAPSHOT_DIR="$HOME/vc/mac-prefs-config"
 
 DRY_RUN=0
 ASSUME_YES=0
@@ -289,7 +289,7 @@ cmd_export() {
     info "Folder: $dir"
     info ""
     info "Copy that folder to the new Mac, then run:"
-    info "  ./macprefs.sh import <folder> --quit-apps"
+    info "  ./mac-prefs.sh import <folder> --quit-apps"
   fi
   # Exit non-zero on any failure: a wrapper (LaunchAgent, script) cannot
   # otherwise tell a complete export from one that wrote almost nothing.
@@ -555,9 +555,9 @@ EOF
     info "back in for everything else to settle."
     if [ "$backup_failed" -gt 0 ]; then
       info "To undo (PARTIAL -- $backup_failed domain(s) were not backed up):"
-      info "  ./macprefs.sh import \"$backup\" --yes"
+      info "  ./mac-prefs.sh import \"$backup\" --yes"
     else
-      info "To undo:  ./macprefs.sh import \"$backup\" --yes"
+      info "To undo:  ./mac-prefs.sh import \"$backup\" --yes"
     fi
   fi
   # Non-zero when anything failed, so a wrapper can tell an import that
@@ -623,15 +623,15 @@ cmd_diff() {
 
 usage() {
   cat <<'EOF'
-macprefs.sh -- carry macOS app preferences to a new Mac
+mac-prefs.sh -- carry macOS app preferences to a new Mac
 
 USAGE
-  ./macprefs.sh export [folder]     dump domains
-                                    (default: macprefs-export/ next to this script)
-  ./macprefs.sh import <folder>     load them onto this Mac
-  ./macprefs.sh snapshot [repo]     dump into a settings repo and commit
-  ./macprefs.sh list                show which domains exist here
-  ./macprefs.sh diff <folder>       compare an export against this Mac
+  ./mac-prefs.sh export [folder]     dump domains
+                                    (default: mac-prefs-export/ next to this script)
+  ./mac-prefs.sh import <folder>     load them onto this Mac
+  ./mac-prefs.sh snapshot [repo]     dump into a settings repo and commit
+  ./mac-prefs.sh list                show which domains exist here
+  ./mac-prefs.sh diff <folder>       compare an export against this Mac
 
 OPTIONS
   -n, --dry-run      show what would happen, change nothing
@@ -641,9 +641,9 @@ OPTIONS
   -h, --help         this text
 
 TYPICAL USE
-  old Mac:   ./macprefs.sh export
-             # copy the macprefs-export folder to the new Mac (AirDrop, USB, ...)
-  new Mac:   ./macprefs.sh import macprefs-export/latest --quit-apps
+  old Mac:   ./mac-prefs.sh export
+             # copy the mac-prefs-export folder to the new Mac (AirDrop, USB, ...)
+  new Mac:   ./mac-prefs.sh import mac-prefs-export/latest --quit-apps
 
 SNAPSHOT
   `snapshot` keeps a private settings repo up to date. It writes into
@@ -652,10 +652,10 @@ SNAPSHOT
   a changelog, and commits only when something actually changed. It never
   pushes; that is git-autosync's job.
 
-  Target: the argument, else $MACPREFS_SNAPSHOT_DIR, else ~/vc/macprefs-config
+  Target: the argument, else $MACPREFS_SNAPSHOT_DIR, else ~/vc/mac-prefs-config
 
   Restore on a new Mac:
-    ./macprefs.sh import ~/vc/macprefs-config/current --quit-apps
+    ./mac-prefs.sh import ~/vc/mac-prefs-config/current --quit-apps
 
   The settings repo holds account details and machine-specific paths.
   Keep it private.
@@ -672,7 +672,7 @@ NOTES
   preferences in memory and the on-disk copy may lag behind what you see.
 
   Import saves a rollback copy to ~/.macprefs-rollback/<timestamp> first.
-  Undo with:  ./macprefs.sh import ~/.macprefs-rollback/<timestamp> --yes
+  Undo with:  ./mac-prefs.sh import ~/.macprefs-rollback/<timestamp> --yes
   The copy is best-effort: a domain that cannot be read is named in a warning
   and left out, and the copy's MANIFEST.txt then says `incomplete <n>` and
   lists the domains it does not cover.

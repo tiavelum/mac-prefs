@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# install-snapshot-agent.sh -- run `macprefs.sh snapshot` on a schedule.
+# install-snapshot-agent.sh -- run `mac-prefs.sh snapshot` on a schedule.
 #
 #   ./install-snapshot-agent.sh              # weekly, Sunday 10:00
 #   ./install-snapshot-agent.sh --daily      # daily, 10:00
 #   ./install-snapshot-agent.sh --at 21:30   # different time of day
-#   ./install-snapshot-agent.sh --target ~/vc/macprefs-config
+#   ./install-snapshot-agent.sh --target ~/vc/mac-prefs-config
 #   ./install-snapshot-agent.sh --uninstall
 #
 # Installs a LaunchAgent that snapshots your settings into the private
@@ -16,11 +16,12 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-LABEL="com.tiavelum.macprefs-snapshot"
+LABEL="com.tiavelum.mac-prefs-snapshot"
+OLD_LABEL="com.tiavelum.macprefs-snapshot"   # the label before the tool was renamed; unloaded on install so a re-run leaves one agent, not two
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-LOG="$HOME/Library/Logs/macprefs-snapshot.log"
+LOG="$HOME/Library/Logs/mac-prefs-snapshot.log"
 
-TARGET="$HOME/vc/macprefs-config"
+TARGET="$HOME/vc/mac-prefs-config"
 WEEKLY=1
 HOUR=10
 MINUTE=0
@@ -53,7 +54,8 @@ done
 if [ "$UNINSTALL" -eq 1 ]; then
   launchctl bootout "gui/$UID/$LABEL" 2>/dev/null \
     || launchctl unload "$PLIST" 2>/dev/null || true
-  rm -f "$PLIST"
+  launchctl bootout "gui/$UID/$OLD_LABEL" 2>/dev/null || true
+  rm -f "$PLIST" "$HOME/Library/LaunchAgents/$OLD_LABEL.plist"
   ok "removed $LABEL"
   exit 0
 fi
@@ -61,7 +63,7 @@ fi
 case "$TARGET" in "~"/*) TARGET="$HOME/${TARGET#~/}" ;; esac
 [ -d "$TARGET" ] || die "settings repo not found: $TARGET
 Clone it first, then re-run with --target if it lives elsewhere."
-[ -x "$SCRIPT_DIR/macprefs.sh" ] || die "macprefs.sh not found next to this script"
+[ -x "$SCRIPT_DIR/mac-prefs.sh" ] || die "mac-prefs.sh not found next to this script"
 
 mkdir -p "$HOME/Library/LaunchAgents" "$(dirname "$LOG")"
 
@@ -87,7 +89,7 @@ cat > "$PLIST" <<PLIST_EOF
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>$SCRIPT_DIR/macprefs.sh</string>
+        <string>$SCRIPT_DIR/mac-prefs.sh</string>
         <string>snapshot</string>
         <string>$TARGET</string>
     </array>
@@ -107,6 +109,10 @@ PLIST_EOF
 
 plutil -lint "$PLIST" >/dev/null || die "generated plist is invalid: $PLIST"
 
+# The agent before the tool was renamed. Unload it and drop its plist, so a
+# machine that had the old one ends up with exactly one agent, not two.
+launchctl bootout "gui/$UID/$OLD_LABEL" 2>/dev/null || true
+rm -f "$HOME/Library/LaunchAgents/$OLD_LABEL.plist"
 launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || true
 if launchctl bootstrap "gui/$UID" "$PLIST" 2>/dev/null; then
   ok "loaded $LABEL"

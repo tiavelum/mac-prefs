@@ -1,6 +1,6 @@
 # Exports and rollbacks are machine-specific and may contain personal
 # settings (paths, recent files, account identifiers). Never commit them.
-macprefs-export/
+mac-prefs-export/
 *.plist
 
 # macOS noise

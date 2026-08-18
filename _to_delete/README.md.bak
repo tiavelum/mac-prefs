@@ -197,13 +197,13 @@ what does and doesn't come across.
 Every import first snapshots what it is about to overwrite:
 
 ```
-~/.mac-prefs-rollback/<timestamp>/
+~/.macprefs-rollback/<timestamp>/
 ```
 
 To roll back:
 
 ```bash
-./mac-prefs.sh import ~/.mac-prefs-rollback/<timestamp> --yes
+./mac-prefs.sh import ~/.macprefs-rollback/<timestamp> --yes
 ```
 
 The snapshot is best-effort, not a guarantee. A domain that cannot be read is
@@ -211,7 +211,7 @@ reported by name and skipped, and the import continues — so the backup may not
 cover everything the import then replaces. To tell whether it was complete:
 
 ```bash
-cat ~/.mac-prefs-rollback/<timestamp>/MANIFEST.txt
+cat ~/.macprefs-rollback/<timestamp>/MANIFEST.txt
 ```
 
 `incomplete 0` means every domain was saved. A higher number is followed by a
