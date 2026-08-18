@@ -399,6 +399,11 @@ $(cd "$target" && git diff --cached --name-only -- current | sed 's/^current\///
   if ( cd "$target" && git commit -q -m "$msg" -- current ); then
     info ""
     ok "committed $changed changed file(s) in $target"
+    # Tell the transport there is something to push. Without this the commit
+    # waits for the interval job - up to 15 minutes - while the line above
+    # implies it is on its way. The touch is harmless if git-autosync is not
+    # installed: an unread file in .git.
+    touch "$target/.git/autosync-push" 2>/dev/null || true
     info "${C_DIM}push happens via git-autosync${C_RST}"
   else
     warn "commit failed in $target"
