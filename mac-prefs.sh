@@ -298,9 +298,29 @@ cmd_export() {
 
 # ---------------------------------------------------------------- snapshot
 
-# Export into a settings repo and commit the result. Deliberately does NOT
-# push -- pushing is git-autosync's job, and a snapshot that fails to push
-# should still be a snapshot.
+# Publish the settings repo's waiting commits: pull --rebase, then push.
+# A failure only warns. The snapshot is already committed, and the next run
+# pushes everything still waiting, so an offline Mac loses nothing.
+# --autostash keeps unrelated uncommitted work in the settings repo from
+# blocking every future pull.
+publish_snapshot() {
+  local target="$1" out
+  if ! out="$(cd "$target" && git pull -q --rebase --autostash 2>&1)"; then
+    warn "git pull failed in $target -- committed, NOT pushed; the next snapshot retries"
+    [ -n "$out" ] && warn "  ${out%%$'\n'*}"
+    return 0
+  fi
+  if out="$(cd "$target" && git push -q 2>&1)"; then
+    ok "pushed to $(cd "$target" && git rev-parse --abbrev-ref '@{u}' 2>/dev/null || echo origin)"
+  else
+    warn "git push failed in $target -- committed, NOT pushed; the next snapshot retries"
+    [ -n "$out" ] && warn "  ${out%%$'\n'*}"
+  fi
+  return 0
+}
+
+# Export into a settings repo, commit the result and push it. A snapshot
+# that fails to push is still a snapshot (see publish_snapshot).
 #
 # Target resolution: argument, then $MACPREFS_SNAPSHOT_DIR, then the default.
 # Settings are written to <target>/current/, overwriting the previous state:
@@ -386,6 +406,10 @@ Clone it first, or pass the path:  $0 snapshot <path>"
         && git checkout -- current/MANIFEST.txt 2>/dev/null ) || true
     info ""
     info "No settings changed since the last snapshot -- nothing committed."
+    # A run with nothing new still pushes what an earlier offline run left.
+    local waiting
+    waiting="$(cd "$target" && git rev-list --count '@{u}..HEAD' 2>/dev/null || echo 0)"
+    [ "${waiting:-0}" -gt 0 ] && publish_snapshot "$target"
     [ "$failed" -eq 0 ] || return 1
     return 0
   fi
@@ -399,12 +423,7 @@ $(cd "$target" && git diff --cached --name-only -- current | sed 's/^current\///
   if ( cd "$target" && git commit -q -m "$msg" -- current ); then
     info ""
     ok "committed $changed changed file(s) in $target"
-    # Tell the transport there is something to push. Without this the commit
-    # waits for the interval job - up to 15 minutes - while the line above
-    # implies it is on its way. The touch is harmless if git-autosync is not
-    # installed: an unread file in .git.
-    touch "$target/.git/autosync-push" 2>/dev/null || true
-    info "${C_DIM}push happens via git-autosync${C_RST}"
+    publish_snapshot "$target"
   else
     warn "commit failed in $target"
     return 1
@@ -654,8 +673,9 @@ SNAPSHOT
   `snapshot` keeps a private settings repo up to date. It writes into
   <repo>/current/ -- overwriting the previous state, because git already
   stores the history -- converts the plists to XML so `git log -p` reads as
-  a changelog, and commits only when something actually changed. It never
-  pushes; that is git-autosync's job.
+  a changelog, commits only when something actually changed, and then pulls
+  (rebase) and pushes. A failed pull or push only warns; the commit stays,
+  and the next snapshot pushes whatever is still waiting.
 
   Target: the argument, else $MACPREFS_SNAPSHOT_DIR, else ~/vc/mac-prefs-config
 

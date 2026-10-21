@@ -38,7 +38,8 @@ mac-prefs-config    private   your settings, folder current/
 
 `snapshot` writes into `<repo>/current/` (git is the history — no
 timestamped folders), stores plists as XML so `git log -p` reads as a
-changelog, commits only when something changed, and never pushes. Run it on
+changelog, commits only when something changed, and then pushes (a failed
+push only warns; the next snapshot pushes what is still waiting). Run it on
 a schedule with `./install-snapshot-agent.sh` (weekly, Sunday 10:00;
 `--daily`, `--at HH:MM`, `--uninstall`; a sleeping Mac runs it on wake).
 
