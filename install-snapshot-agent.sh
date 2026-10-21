@@ -9,8 +9,8 @@
 #   ./install-snapshot-agent.sh --uninstall
 #
 # Installs a LaunchAgent that snapshots your settings into the private
-# settings repo and commits any change. It does not push -- git-autosync
-# does that. If the Mac is asleep at the scheduled moment, launchd runs
+# settings repo, commits any change and pushes it. If the Mac is asleep at
+# the scheduled moment, launchd runs
 # the job when it next wakes, so a sleeping laptop does not skip a week.
 
 set -uo pipefail
