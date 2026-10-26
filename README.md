@@ -42,6 +42,10 @@ changelog, commits only when something changed, and then pushes (a failed
 push only warns; the next snapshot pushes what is still waiting). Run it on
 a schedule with `./install-snapshot-agent.sh` (weekly, Sunday 10:00;
 `--daily`, `--at HH:MM`, `--uninstall`; a sleeping Mac runs it on wake).
+System Settings → General → Login Items & Extensions lists the agent as
+**mac-prefs snapshot**, from an unidentified developer; switched off, no
+snapshots are taken. It shows that name because the agent runs bash through
+a link of that name in `~/Library/Application Support/mac-prefs/`.
 
 Restore on a new Mac:
 

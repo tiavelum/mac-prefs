@@ -20,6 +20,10 @@ LABEL="com.tiavelum.mac-prefs-snapshot"
 OLD_LABEL="com.tiavelum.macprefs-snapshot"   # the label before the tool was renamed; unloaded on install so a re-run leaves one agent, not two
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 LOG="$HOME/Library/Logs/mac-prefs-snapshot.log"
+# Login Items & Extensions names an agent after the file its first program
+# argument names, so the agent runs bash through this link: the entry then
+# reads "mac-prefs snapshot", not "bash".
+LINK="$HOME/Library/Application Support/mac-prefs/mac-prefs snapshot"
 
 TARGET="$HOME/vc/mac-prefs-config"
 WEEKLY=1
@@ -55,7 +59,7 @@ if [ "$UNINSTALL" -eq 1 ]; then
   launchctl bootout "gui/$UID/$LABEL" 2>/dev/null \
     || launchctl unload "$PLIST" 2>/dev/null || true
   launchctl bootout "gui/$UID/$OLD_LABEL" 2>/dev/null || true
-  rm -f "$PLIST" "$HOME/Library/LaunchAgents/$OLD_LABEL.plist"
+  rm -f "$PLIST" "$HOME/Library/LaunchAgents/$OLD_LABEL.plist" "$LINK"
   ok "removed $LABEL"
   exit 0
 fi
@@ -65,7 +69,8 @@ case "$TARGET" in "~"/*) TARGET="$HOME/${TARGET#~/}" ;; esac
 Clone it first, then re-run with --target if it lives elsewhere."
 [ -x "$SCRIPT_DIR/mac-prefs.sh" ] || die "mac-prefs.sh not found next to this script"
 
-mkdir -p "$HOME/Library/LaunchAgents" "$(dirname "$LOG")"
+mkdir -p "$HOME/Library/LaunchAgents" "$(dirname "$LOG")" "$(dirname "$LINK")"
+ln -sfn /bin/bash "$LINK"
 
 if [ "$WEEKLY" -eq 1 ]; then
   SCHEDULE="        <key>Weekday</key><integer>$WEEKDAY</integer>
@@ -88,7 +93,7 @@ cat > "$PLIST" <<PLIST_EOF
     <string>$LABEL</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/bin/bash</string>
+        <string>$LINK</string>
         <string>$SCRIPT_DIR/mac-prefs.sh</string>
         <string>snapshot</string>
         <string>$TARGET</string>
