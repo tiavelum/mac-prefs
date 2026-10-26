@@ -39,7 +39,10 @@ mac-prefs-config    private   your settings, folder current/
 `snapshot` writes into `<repo>/current/` (git is the history — no
 timestamped folders), stores plists as XML so `git log -p` reads as a
 changelog, commits only when something changed, and then pushes (a failed
-push only warns; the next snapshot pushes what is still waiting). Run it on
+push only warns; the next snapshot pushes what is still waiting). A listed
+domain the run cannot read keeps its file from the last snapshot, and the
+run names it: the scheduled agent cannot read the settings of sandboxed apps
+such as Photos, Preview and TextEdit, which a run from Terminal can. Run it on
 a schedule with `./install-snapshot-agent.sh` (weekly, Sunday 10:00;
 `--daily`, `--at HH:MM`, `--uninstall`; a sleeping Mac runs it on wake).
 System Settings → General → Login Items & Extensions lists the agent as

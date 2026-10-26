@@ -349,26 +349,50 @@ Clone it first, or pass the path:  $0 snapshot <path>"
     info ""
   fi
 
-  if [ "$DRY_RUN" -eq 0 ]; then
-    mkdir -p "$dir"
-    # clear stale files so a domain you removed from the config disappears
-    rm -f "$dir"/*.plist "$dir/MANIFEST.txt"
-  fi
-
-  export_into "$dir" 1
-  local failed="$MP_FAILED"
-
   if [ "$DRY_RUN" -eq 1 ]; then
+    export_into "$dir" 1
     info ""
-    info "${C_BLD}$MP_EXPORTED domains, $MP_BYHOST ByHost, $MP_SKIPPED skipped, $failed failed ${C_DIM}(dry run)${C_RST}"
-    [ "$failed" -eq 0 ] || return 1
+    info "${C_BLD}$MP_EXPORTED domains, $MP_BYHOST ByHost, $MP_SKIPPED skipped, $MP_FAILED failed ${C_DIM}(dry run)${C_RST}"
+    [ "$MP_FAILED" -eq 0 ] || return 1
     return 0
   fi
 
-  write_manifest "$dir" "$MP_EXPORTED" "$MP_BYHOST"
+  # Export into a scratch folder first, then bring current/ in line with it.
+  # A run without access to app data -- the launch agent, which macOS does
+  # not let read the containers of sandboxed apps -- sees those domains as
+  # not set. Deleting their files would drop settings that a Terminal run
+  # captured, so a file whose domain is still listed is kept when this run
+  # wrote none; only the files of domains removed from the list go.
+  local fresh; fresh="$(mktemp -d "${TMPDIR:-/tmp}/mac-prefs-snapshot.XXXXXX")" \
+    || die "could not create a scratch folder for the snapshot"
+  export_into "$fresh" 1
+  local failed="$MP_FAILED"
+  write_manifest "$fresh" "$MP_EXPORTED" "$MP_BYHOST"
+
+  mkdir -p "$dir"
+  local listed; listed="$(read_domains)"
+  local f name dom kept=0 kept_names=""
+  for f in "$dir"/*.plist; do
+    [ -e "$f" ] || continue
+    name="$(basename "$f")"
+    [ -e "$fresh/$name" ] && continue
+    dom="$(file_to_domain "$f")"; dom="${dom% byhost}"
+    if grep -qxF -- "$dom" <<< "$listed"; then
+      cp -p "$f" "$fresh/$name"
+      kept=$((kept + 1)); kept_names="$kept_names $name"
+      printf 'kept_unreadable %s\n' "$name" >> "$fresh/MANIFEST.txt"
+    fi
+  done
+  rm -f "$dir"/*.plist "$dir/MANIFEST.txt"
+  cp -p "$fresh"/*.plist "$fresh/MANIFEST.txt" "$dir"/ 2>/dev/null
+  rm -rf "$fresh"
 
   info ""
   info "${C_BLD}$MP_EXPORTED domains, $MP_BYHOST ByHost, $MP_SKIPPED skipped, $failed failed${C_RST}"
+  if [ "$kept" -gt 0 ]; then
+    info "kept $kept file(s) from the last snapshot, unreadable in this run:"
+    info "  ${C_DIM}${kept_names# }${C_RST}"
+  fi
   [ "$failed" -eq 0 ] || warn "this snapshot is incomplete -- $failed domain(s) could not be exported"
 
   if [ ! -d "$target/.git" ]; then
@@ -676,6 +700,13 @@ SNAPSHOT
   a changelog, commits only when something actually changed, and then pulls
   (rebase) and pushes. A failed pull or push only warns; the commit stays,
   and the next snapshot pushes whatever is still waiting.
+
+  A listed domain this run cannot read keeps its file from the last
+  snapshot, and the run names it. The scheduled agent cannot read the
+  settings of sandboxed apps (Photos, Preview, TextEdit, ...), which a run
+  from Terminal can. Only domains removed from the list lose their file;
+  a domain that is gone from the Mac but still listed keeps it until the
+  file is removed by hand (git rm current/<domain>.plist).
 
   Target: the argument, else $MACPREFS_SNAPSHOT_DIR, else ~/vc/mac-prefs-config
 
