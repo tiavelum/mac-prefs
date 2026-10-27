@@ -98,4 +98,35 @@ captured and is not Safari's settings.) Granting Full Disk Access is
 deliberately not the answer: it would have to go to the interpreter the
 scheduled agent runs, far broader than these settings are worth.
 
+## Run the tests
+
+```bash
+tests/run.sh
+```
+
+```
+ok      export_warns_about_a_domain_name_with_an_underscore
+...
+9 run, 0 failed
+```
+
+The tests run `mac-prefs.sh` against stand-ins for `defaults`, `plutil` and
+the other macOS tools, so they need no Mac: bash and git are enough, and on a
+Mac they do not touch its settings. They check what `snapshot` writes, keeps
+and deletes, that `import` saves its rollback first and that `--dry-run`
+changes nothing. `tests/run.sh import` runs only the tests whose name
+contains `import`. GitHub runs them on every pull request.
+
+## Files
+
+| Path | Contains |
+|---|---|
+| `mac-prefs.sh` | The tool |
+| `mac-prefs-domains.conf` | The domains it covers |
+| `install-snapshot-agent.sh` | Schedules `snapshot` |
+| `tests/` | `run.sh` and, in `bin/`, the stand-ins for the macOS tools |
+| `.github/` | The workflow that runs the tests |
+
+## License
+
 MIT — see `LICENSE`.
