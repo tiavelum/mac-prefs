@@ -44,31 +44,43 @@ MP_TMP=""
 # ---------------------------------------------------------------- output helpers
 
 if [ -t 1 ]; then
-  C_DIM=$'\033[2m'; C_RED=$'\033[31m'; C_GRN=$'\033[32m'
-  C_YEL=$'\033[33m'; C_BLD=$'\033[1m'; C_RST=$'\033[0m'
+  C_DIM=$'\033[2m'
+  C_RED=$'\033[31m'
+  C_GRN=$'\033[32m'
+  C_YEL=$'\033[33m'
+  C_BLD=$'\033[1m'
+  C_RST=$'\033[0m'
 else
-  C_DIM=""; C_RED=""; C_GRN=""; C_YEL=""; C_BLD=""; C_RST=""
+  C_DIM=""
+  C_RED=""
+  C_GRN=""
+  C_YEL=""
+  C_BLD=""
+  C_RST=""
 fi
 
 info() { printf '%s\n' "$*"; }
-ok()   { printf '%s  ok%s  %s\n'  "$C_GRN" "$C_RST" "$*"; }
-skip() { printf '%sskip%s  %s\n'  "$C_DIM" "$C_RST" "$*"; }
-warn() { printf '%swarn%s  %s\n'  "$C_YEL" "$C_RST" "$*" >&2; }
-die()  { printf '%sfail%s  %s\n'  "$C_RED" "$C_RST" "$*" >&2; exit 1; }
+ok() { printf '%s  ok%s  %s\n' "$C_GRN" "$C_RST" "$*"; }
+skip() { printf '%sskip%s  %s\n' "$C_DIM" "$C_RST" "$*"; }
+warn() { printf '%swarn%s  %s\n' "$C_YEL" "$C_RST" "$*" >&2; }
+die() {
+  printf '%sfail%s  %s\n' "$C_RED" "$C_RST" "$*" >&2
+  exit 1
+}
 
 # ---------------------------------------------------------------- preflight
 
 require_macos() {
   [ "$(uname -s)" = "Darwin" ] || die "this script only runs on macOS (found $(uname -s))"
   command -v defaults >/dev/null 2>&1 || die "'defaults' not found in PATH"
-  command -v plutil   >/dev/null 2>&1 || die "'plutil' not found in PATH"
+  command -v plutil >/dev/null 2>&1 || die "'plutil' not found in PATH"
 }
 
 # Prints one domain per line: comments stripped, blanks dropped, de-duplicated.
 read_domains() {
   [ -f "$CONF" ] || die "domain list not found: $CONF"
-  sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$CONF" \
-    | awk 'NF && !seen[$0]++'
+  sed -e 's/#.*//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' "$CONF" |
+    awk 'NF && !seen[$0]++'
 }
 
 # domain_exists <domain> [byhost]
@@ -103,10 +115,11 @@ do_import() {
 # com.apple.dock.plist              -> com.apple.dock
 # com.apple.controlcenter.byhost.plist -> com.apple.controlcenter byhost
 file_to_domain() {
-  local base; base="$(basename "$1" .plist)"
+  local base
+  base="$(basename "$1" .plist)"
   case "$base" in
     *.byhost) printf '%s byhost\n' "$(printf '%s' "${base%.byhost}" | tr '_' '/')" ;;
-    *)        printf '%s\n'        "$(printf '%s' "$base"           | tr '_' '/')" ;;
+    *) printf '%s\n' "$(printf '%s' "$base" | tr '_' '/')" ;;
   esac
 }
 
@@ -151,7 +164,8 @@ quit_app() {
   local app="$1" n=0
   osascript -e "tell application \"$app\" to quit" >/dev/null 2>&1 || true
   while pgrep -x "$app" >/dev/null 2>&1 && [ "$n" -lt 20 ]; do
-    sleep 0.5; n=$((n + 1))
+    sleep 0.5
+    n=$((n + 1))
   done
   ! pgrep -x "$app" >/dev/null 2>&1
 }
@@ -164,7 +178,7 @@ confirm() {
   else
     read -r -p "$1 [y/N] " reply || return 1
   fi
-  case "$reply" in y|Y|yes|YES) return 0 ;; *) return 1 ;; esac
+  case "$reply" in y | Y | yes | YES) return 0 ;; *) return 1 ;; esac
 }
 
 # ---------------------------------------------------------------- export core
@@ -180,10 +194,14 @@ MP_FAILED=0
 # which is what makes them diff cleanly in git.
 export_into() {
   local dir="$1" as_xml="${2:-0}"
-  local domains; domains="$(read_domains)"
+  local domains
+  domains="$(read_domains)"
   local d safe got
 
-  MP_EXPORTED=0; MP_BYHOST=0; MP_SKIPPED=0; MP_FAILED=0
+  MP_EXPORTED=0
+  MP_BYHOST=0
+  MP_SKIPPED=0
+  MP_FAILED=0
 
   for d in $domains; do
     safe="$(printf '%s' "$d" | tr '/' '_')"
@@ -192,10 +210,12 @@ export_into() {
     # 1. the ordinary domain
     if domain_exists "$d"; then
       if [ "$DRY_RUN" -eq 1 ]; then
-        ok "$d ${C_DIM}(dry run)${C_RST}"; got=1
+        ok "$d ${C_DIM}(dry run)${C_RST}"
+        got=1
       elif do_export "$d" "$dir/$safe.plist"; then
         [ "$as_xml" -eq 1 ] && plutil -convert xml1 "$dir/$safe.plist" >/dev/null 2>&1
-        ok "$d"; got=1
+        ok "$d"
+        got=1
       else
         warn "$d -- export failed"
         MP_FAILED=$((MP_FAILED + 1))
@@ -207,11 +227,13 @@ export_into() {
     if domain_exists "$d" byhost; then
       if [ "$DRY_RUN" -eq 1 ]; then
         ok "$d ${C_DIM}(ByHost, dry run)${C_RST}"
-        MP_BYHOST=$((MP_BYHOST + 1)); got=1
+        MP_BYHOST=$((MP_BYHOST + 1))
+        got=1
       elif do_export "$d" "$dir/$safe.byhost.plist" byhost; then
         [ "$as_xml" -eq 1 ] && plutil -convert xml1 "$dir/$safe.byhost.plist" >/dev/null 2>&1
         ok "$d ${C_DIM}(ByHost)${C_RST}"
-        MP_BYHOST=$((MP_BYHOST + 1)); got=1
+        MP_BYHOST=$((MP_BYHOST + 1))
+        got=1
       else
         warn "$d -- ByHost export failed"
         MP_FAILED=$((MP_FAILED + 1))
@@ -246,7 +268,7 @@ write_manifest() {
     echo "macos_build $(sw_vers -buildVersion)"
     echo "domain_count $exported"
     echo "byhost_count $byhost"
-  } > "$dir/MANIFEST.txt"
+  } >"$dir/MANIFEST.txt"
 }
 
 # ---------------------------------------------------------------- export
@@ -256,17 +278,21 @@ cmd_export() {
   local out="${1:-$DEFAULT_OUT}"
   [ -n "$out" ] || out="$DEFAULT_OUT"
 
-  local stamp; stamp="$(date +%Y-%m-%d-%H%M%S)"
+  local stamp
+  stamp="$(date +%Y-%m-%d-%H%M%S)"
   local dir="$out/$stamp"
 
-  local domains; domains="$(read_domains)"
+  local domains
+  domains="$(read_domains)"
   [ -n "$domains" ] || die "no domains listed in $CONF"
-  local count; count="$(printf '%s\n' "$domains" | wc -l | tr -d ' ')"
+  local count
+  count="$(printf '%s\n' "$domains" | wc -l | tr -d ' ')"
 
   info "${C_BLD}Exporting $count domains${C_RST} -> $dir"
   info ""
 
-  local running; running="$(running_apps_for_domains $domains)"
+  local running
+  running="$(running_apps_for_domains $domains)"
   if [ -n "$running" ]; then
     warn "these apps are running; quit them for a fully current export:"
     warn "  $(printf '%s' "$running" | tr '\n' ' ')"
@@ -308,7 +334,8 @@ snapshot_issue() {
 }
 
 publish_snapshot() {
-  local issue; issue="$(snapshot_issue "$1")"
+  local issue
+  issue="$(snapshot_issue "$1")"
   if [ -n "$issue" ]; then
     publish_by_pull_request "$1" "$issue"
   else
@@ -321,7 +348,10 @@ find_gh() {
   command -v gh 2>/dev/null && return 0
   local p
   for p in /opt/homebrew/bin/gh /usr/local/bin/gh; do
-    [ -x "$p" ] && { printf '%s\n' "$p"; return 0; }
+    [ -x "$p" ] && {
+      printf '%s\n' "$p"
+      return 0
+    }
   done
   return 1
 }
@@ -364,16 +394,16 @@ publish_by_pull_request() {
     [ -n "$out" ] && warn "  ${out%%$'\n'*}"
     return 0
   fi
-  ( cd "$target" && git push -q origin --delete "$branch" ) >/dev/null 2>&1 \
-    || warn "merged, but the branch $branch was not deleted"
-  if ! ( cd "$target" && git fetch -q origin "$base" ) 2>/dev/null; then
+  (cd "$target" && git push -q origin --delete "$branch") >/dev/null 2>&1 ||
+    warn "merged, but the branch $branch was not deleted"
+  if ! (cd "$target" && git fetch -q origin "$base") 2>/dev/null; then
     warn "merged; fetching $upstream failed, so this clone still holds the snapshot commits"
     return 0
   fi
   # The squash holds this clone's current/. Only when the remote shows exactly
   # that is the clone moved onto it; --keep refuses to touch uncommitted work.
-  if ( cd "$target" && git diff --quiet HEAD "$upstream" -- current \
-         && git reset -q --keep "$upstream" ) 2>/dev/null; then
+  if (cd "$target" && git diff --quiet HEAD "$upstream" -- current &&
+    git reset -q --keep "$upstream") 2>/dev/null; then
     ok "merged into $upstream through a pull request"
   else
     warn "merged, but $upstream differs from this clone's current/ -- clone left as is; compare by hand"
@@ -424,8 +454,10 @@ Clone it first, or pass the path:  $0 snapshot <path>"
   info "${C_BLD}Snapshotting${C_RST} -> $dir"
   info ""
 
-  local domains; domains="$(read_domains)"
-  local running; running="$(running_apps_for_domains $domains)"
+  local domains
+  domains="$(read_domains)"
+  local running
+  running="$(running_apps_for_domains $domains)"
   if [ -n "$running" ]; then
     warn "running apps may not have flushed current settings to disk:"
     warn "  $(printf '%s' "$running" | tr '\n' ' ')"
@@ -446,24 +478,28 @@ Clone it first, or pass the path:  $0 snapshot <path>"
   # not set. Deleting their files would drop settings that a Terminal run
   # captured, so a file whose domain is still listed is kept when this run
   # wrote none; only the files of domains removed from the list go.
-  local fresh; fresh="$(mktemp -d "${TMPDIR:-/tmp}/mac-prefs-snapshot.XXXXXX")" \
-    || die "could not create a scratch folder for the snapshot"
+  local fresh
+  fresh="$(mktemp -d "${TMPDIR:-/tmp}/mac-prefs-snapshot.XXXXXX")" ||
+    die "could not create a scratch folder for the snapshot"
   export_into "$fresh" 1
   local failed="$MP_FAILED"
   write_manifest "$fresh" "$MP_EXPORTED" "$MP_BYHOST"
 
   mkdir -p "$dir"
-  local listed; listed="$(read_domains)"
+  local listed
+  listed="$(read_domains)"
   local f name dom kept=0 kept_names=""
   for f in "$dir"/*.plist; do
     [ -e "$f" ] || continue
     name="$(basename "$f")"
     [ -e "$fresh/$name" ] && continue
-    dom="$(file_to_domain "$f")"; dom="${dom% byhost}"
-    if grep -qxF -- "$dom" <<< "$listed"; then
+    dom="$(file_to_domain "$f")"
+    dom="${dom% byhost}"
+    if grep -qxF -- "$dom" <<<"$listed"; then
       cp -p "$f" "$fresh/$name"
-      kept=$((kept + 1)); kept_names="$kept_names $name"
-      printf 'kept_unreadable %s\n' "$name" >> "$fresh/MANIFEST.txt"
+      kept=$((kept + 1))
+      kept_names="$kept_names $name"
+      printf 'kept_unreadable %s\n' "$name" >>"$fresh/MANIFEST.txt"
     fi
   done
   rm -f "$dir"/*.plist "$dir/MANIFEST.txt"
@@ -491,7 +527,8 @@ Clone it first, or pass the path:  $0 snapshot <path>"
   # Staging is scoped to current/: this command owns that directory and
   # nothing else in the settings repo.
   local add_err add_rc
-  add_err="$(cd "$target" && git add -A -- current 2>&1)"; add_rc=$?
+  add_err="$(cd "$target" && git add -A -- current 2>&1)"
+  add_rc=$?
   if [ "$add_rc" -ne 0 ]; then
     warn "git add failed in $target (exit $add_rc) -- settings written but NOT committed"
     [ -n "$add_err" ] && warn "  $add_err"
@@ -501,16 +538,16 @@ Clone it first, or pass the path:  $0 snapshot <path>"
   # Commit only if something actually changed. MANIFEST.txt carries a
   # timestamp that changes every run, so it cannot be the only thing staged.
   local changed
-  changed="$(cd "$target" && git diff --cached --name-only -- current \
-             | grep -v '^current/MANIFEST.txt$' | wc -l | tr -d ' ')"
+  changed="$(cd "$target" && git diff --cached --name-only -- current |
+    grep -v '^current/MANIFEST.txt$' | wc -l | tr -d ' ')"
 
   if [ "${changed:-0}" -eq 0 ]; then
     # Only MANIFEST.txt moved, and only because it stamps the time. Put it
     # back so the settings repo is left as it was found -- unstaging current/
     # only, so work the user had staged elsewhere stays staged.
-    ( cd "$target" \
-        && git reset -q -- current \
-        && git checkout -- current/MANIFEST.txt 2>/dev/null ) || true
+    (cd "$target" &&
+      git reset -q -- current &&
+      git checkout -- current/MANIFEST.txt 2>/dev/null) || true
     info ""
     info "No settings changed since the last snapshot -- nothing committed."
     # A run with nothing new still pushes what an earlier offline run left.
@@ -521,8 +558,10 @@ Clone it first, or pass the path:  $0 snapshot <path>"
     return 0
   fi
 
-  local host; host="$(scutil --get ComputerName 2>/dev/null || hostname)"
-  local issue; issue="$(snapshot_issue "$target")"
+  local host
+  host="$(scutil --get ComputerName 2>/dev/null || hostname)"
+  local issue
+  issue="$(snapshot_issue "$target")"
   local msg="chore: snapshot $changed changed settings
 
 On $host:
@@ -532,7 +571,7 @@ $(cd "$target" && git diff --cached --name-only -- current | sed 's/^current\///
 Part of #$issue"
 
   # Scoped to current/ for the same reason as the staging above.
-  if ( cd "$target" && git commit -q -m "$msg" -- current ); then
+  if (cd "$target" && git commit -q -m "$msg" -- current); then
     info ""
     ok "committed $changed changed file(s) in $target"
     publish_snapshot "$target"
@@ -561,7 +600,8 @@ cmd_import() {
     local src_ver here_ver src_major here_major
     src_ver="$(awk '/^macos_version/{print $2}' "$dir/MANIFEST.txt")"
     here_ver="$(sw_vers -productVersion)"
-    src_major="${src_ver%%.*}"; here_major="${here_ver%%.*}"
+    src_major="${src_ver%%.*}"
+    here_major="${here_ver%%.*}"
     info "${C_DIM}export from macOS $src_ver  ->  this Mac runs macOS $here_ver${C_RST}"
     if [ -n "$src_major" ] && [ "$src_major" != "$here_major" ]; then
       warn "different major macOS versions -- preferences usually survive this,"
@@ -588,7 +628,8 @@ cmd_import() {
 $plists
 EOF
 
-  local running; running="$(running_apps_for_domains $doms)"
+  local running
+  running="$(running_apps_for_domains $doms)"
   if [ -n "$running" ]; then
     if [ "$QUIT_APPS" -eq 1 ]; then
       local app
@@ -626,19 +667,23 @@ EOF
       if domain_exists "$d" "$mode"; then
         if [ "$mode" = "byhost" ]; then
           do_export "$d" "$backup/$safe.byhost.plist" byhost || {
-            backup_failed=$((backup_failed + 1)); backup_missed="$backup_missed $d(ByHost)"; }
+            backup_failed=$((backup_failed + 1))
+            backup_missed="$backup_missed $d(ByHost)"
+          }
         else
           do_export "$d" "$backup/$safe.plist" || {
-            backup_failed=$((backup_failed + 1)); backup_missed="$backup_missed $d"; }
+            backup_failed=$((backup_failed + 1))
+            backup_missed="$backup_missed $d"
+          }
         fi
       fi
     done <<EOF
 $plists
 EOF
     printf 'macprefs_version 2\nrollback_for %s\ncreated %s\nincomplete %s\n' \
-      "$dir" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$backup_failed" > "$backup/MANIFEST.txt"
+      "$dir" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$backup_failed" >"$backup/MANIFEST.txt"
     if [ "$backup_failed" -gt 0 ]; then
-      printf 'not_backed_up%s\n' "$backup_missed" >> "$backup/MANIFEST.txt"
+      printf 'not_backed_up%s\n' "$backup_missed" >>"$backup/MANIFEST.txt"
       warn "rollback backup is INCOMPLETE -- $backup_failed domain(s) could not be read:"
       warn "  ${backup_missed# }"
       warn "the undo command shown at the end will NOT restore those domains."
@@ -657,15 +702,24 @@ EOF
     [ -n "$f" ] || continue
     line="$(file_to_domain "$f")"
     d="${line%% *}"
-    case "$line" in *" byhost") mode="byhost"; label="$d ${C_DIM}(ByHost)${C_RST}" ;;
-                    *)          mode="";       label="$d" ;; esac
+    case "$line" in *" byhost")
+      mode="byhost"
+      label="$d ${C_DIM}(ByHost)${C_RST}"
+      ;;
+    *)
+      mode=""
+      label="$d"
+      ;;
+    esac
     if ! plutil -lint "$f" >/dev/null 2>&1; then
       warn "$d -- corrupt plist, skipping"
-      failed=$((failed + 1)); continue
+      failed=$((failed + 1))
+      continue
     fi
     if [ "$DRY_RUN" -eq 1 ]; then
       ok "$label ${C_DIM}(dry run)${C_RST}"
-      imported=$((imported + 1)); continue
+      imported=$((imported + 1))
+      continue
     fi
     if do_import "$d" "$f" "$mode"; then
       ok "$label"
@@ -705,15 +759,25 @@ EOF
 
 cmd_list() {
   require_macos
-  local domains; domains="$(read_domains)"
+  local domains
+  domains="$(read_domains)"
   local d present=0 byhost=0 absent=0
   for d in $domains; do
     local hit=0
-    if domain_exists "$d"; then ok "$d"; present=$((present + 1)); hit=1; fi
-    if domain_exists "$d" byhost; then
-      ok "$d ${C_DIM}(ByHost)${C_RST}"; byhost=$((byhost + 1)); hit=1
+    if domain_exists "$d"; then
+      ok "$d"
+      present=$((present + 1))
+      hit=1
     fi
-    [ "$hit" -eq 0 ] && { skip "$d"; absent=$((absent + 1)); }
+    if domain_exists "$d" byhost; then
+      ok "$d ${C_DIM}(ByHost)${C_RST}"
+      byhost=$((byhost + 1))
+      hit=1
+    fi
+    [ "$hit" -eq 0 ] && {
+      skip "$d"
+      absent=$((absent + 1))
+    }
   done
   info ""
   info "${C_BLD}$present present, $byhost ByHost, $absent not set${C_RST}"
@@ -734,17 +798,27 @@ cmd_diff() {
     [ -e "$f" ] || continue
     line="$(file_to_domain "$f")"
     d="${line%% *}"
-    case "$line" in *" byhost") mode="byhost"; label="$d ${C_DIM}(ByHost)${C_RST}" ;;
-                    *)          mode="";       label="$d" ;; esac
+    case "$line" in *" byhost")
+      mode="byhost"
+      label="$d ${C_DIM}(ByHost)${C_RST}"
+      ;;
+    *)
+      mode=""
+      label="$d"
+      ;;
+    esac
     if ! domain_exists "$d" "$mode"; then
-      skip "$label ${C_DIM}(not set here)${C_RST}"; missing=$((missing + 1)); continue
+      skip "$label ${C_DIM}(not set here)${C_RST}"
+      missing=$((missing + 1))
+      continue
     fi
     do_export "$d" "$tmp/current.plist" "$mode" || continue
     # normalise both to XML so binary-vs-xml encoding is not reported as a change
     plutil -convert xml1 "$tmp/current.plist" -o "$tmp/a.xml" 2>/dev/null || continue
     plutil -convert xml1 "$f" -o "$tmp/b.xml" 2>/dev/null || continue
     if diff -q "$tmp/a.xml" "$tmp/b.xml" >/dev/null 2>&1; then
-      ok "$label ${C_DIM}(identical)${C_RST}"; same=$((same + 1))
+      ok "$label ${C_DIM}(identical)${C_RST}"
+      same=$((same + 1))
     else
       warn "$label differs"
       diff "$tmp/a.xml" "$tmp/b.xml" | head -20 | sed 's/^/      /'
@@ -839,26 +913,36 @@ main() {
   local cmd="" arg1=""
   while [ "$#" -gt 0 ]; do
     case "$1" in
-      -n|--dry-run)   DRY_RUN=1 ;;
-      -y|--yes)       ASSUME_YES=1 ;;
-      -q|--quit-apps) QUIT_APPS=1 ;;
-      -c|--conf)      shift; CONF="${1:-}" ;;
-      -h|--help)      usage; exit 0 ;;
-      -*)             die "unknown option: $1" ;;
-      *)              if [ -z "$cmd" ]; then cmd="$1"
-                      elif [ -z "$arg1" ]; then arg1="$1"; fi ;;
+      -n | --dry-run) DRY_RUN=1 ;;
+      -y | --yes) ASSUME_YES=1 ;;
+      -q | --quit-apps) QUIT_APPS=1 ;;
+      -c | --conf)
+        shift
+        CONF="${1:-}"
+        ;;
+      -h | --help)
+        usage
+        exit 0
+        ;;
+      -*) die "unknown option: $1" ;;
+      *) if [ -z "$cmd" ]; then
+        cmd="$1"
+      elif [ -z "$arg1" ]; then arg1="$1"; fi ;;
     esac
     shift
   done
 
   case "$cmd" in
-    export)   cmd_export "$arg1" ;;
-    import)   cmd_import "$arg1" ;;
+    export) cmd_export "$arg1" ;;
+    import) cmd_import "$arg1" ;;
     snapshot) cmd_snapshot "$arg1" ;;
-    list)     cmd_list ;;
-    diff)     cmd_diff "$arg1" ;;
-    "")       usage; exit 1 ;;
-    *)        die "unknown command: $cmd" ;;
+    list) cmd_list ;;
+    diff) cmd_diff "$arg1" ;;
+    "")
+      usage
+      exit 1
+      ;;
+    *) die "unknown command: $cmd" ;;
   esac
 }
 

@@ -30,35 +30,39 @@ setup() {
   git config --file "$T/gitconfig" user.name "Test"
   git config --file "$T/gitconfig" user.email "test@example.com"
   git config --file "$T/gitconfig" init.defaultBranch main
-  printf 'com.example.alpha\ncom.example.beta\ncom.example.gamma\n' > "$T/conf"
+  printf 'com.example.alpha\ncom.example.beta\ncom.example.gamma\n' >"$T/conf"
   git init -q --bare "$T/remote.git"
   git clone -q "$T/remote.git" "$T/settings" 2>/dev/null
-  ( cd "$T/settings" && echo "settings" > README.md && git add README.md \
-      && git commit -q -m "chore: start" && git push -q origin HEAD:main \
-      && git branch -q -u origin/main ) >/dev/null 2>&1
+  (cd "$T/settings" && echo "settings" >README.md && git add README.md &&
+    git commit -q -m "chore: start" && git push -q origin HEAD:main &&
+    git branch -q -u origin/main) >/dev/null 2>&1
 }
 
 teardown() { rm -rf "$T"; }
 
 # set_pref <domain> <value> [byhost]: the setting the stand-in Mac holds.
 set_pref() {
-  local suffix=.plist; [ "${3:-}" = byhost ] && suffix=.byhost.plist
-  echo "<plist>$1 $2</plist>" > "$FAKE_PREFS/$1$suffix"
+  local suffix=.plist
+  [ "${3:-}" = byhost ] && suffix=.byhost.plist
+  echo "<plist>$1 $2</plist>" >"$FAKE_PREFS/$1$suffix"
 }
 
 # The stand-ins come first on PATH; TMPDIR keeps the tool's scratch
 # folders inside $T.
 mac_prefs() {
   PATH="$TESTS_DIR/bin:$PATH" TMPDIR="$T/tmp" \
-    bash "$TOOL" -c "$T/conf" "$@" > "$T/out" 2>&1
+    bash "$TOOL" -c "$T/conf" "$@" >"$T/out" 2>&1
 }
 
 commits() { git -C "$T/settings" rev-list --count HEAD; }
-pushed()  { git -C "$T/remote.git" rev-list --count main; }
+pushed() { git -C "$T/remote.git" rev-list --count main; }
 
 # ---------------------------------------------------------------- assertions
 
-fail() { echo "    $*"; FAILED=1; }
+fail() {
+  echo "    $*"
+  FAILED=1
+}
 
 expect_status() {
   [ "$STATUS" -eq "$1" ] || fail "exit status $STATUS, expected $1"
@@ -78,8 +82,11 @@ expect_equal() {
 # ---------------------------------------------------------------- tests
 
 test_snapshot_writes_commits_and_pushes_every_readable_domain() {
-  set_pref com.example.alpha 1; set_pref com.example.beta 1; set_pref com.example.gamma 1
-  mac_prefs snapshot "$T/settings"; STATUS=$?
+  set_pref com.example.alpha 1
+  set_pref com.example.beta 1
+  set_pref com.example.gamma 1
+  mac_prefs snapshot "$T/settings"
+  STATUS=$?
   expect_status 0
   expect_content "$T/settings/current/com.example.alpha.plist" "<plist>com.example.alpha 1</plist>"
   expect_file "$T/settings/current/com.example.beta.plist"
@@ -90,24 +97,30 @@ test_snapshot_writes_commits_and_pushes_every_readable_domain() {
 }
 
 test_snapshot_keeps_the_file_of_a_domain_it_cannot_read() {
-  set_pref com.example.alpha 1; set_pref com.example.beta 1; set_pref com.example.gamma 1
+  set_pref com.example.alpha 1
+  set_pref com.example.beta 1
+  set_pref com.example.gamma 1
   mac_prefs snapshot "$T/settings"
   rm "$FAKE_PREFS/com.example.beta.plist"
   set_pref com.example.alpha 2
-  mac_prefs snapshot "$T/settings"; STATUS=$?
+  mac_prefs snapshot "$T/settings"
+  STATUS=$?
   expect_status 0
   expect_content "$T/settings/current/com.example.alpha.plist" "<plist>com.example.alpha 2</plist>"
   expect_content "$T/settings/current/com.example.beta.plist" "<plist>com.example.beta 1</plist>"
   expect_output "kept 1 file(s) from the last snapshot"
-  grep -qx "kept_unreadable com.example.beta.plist" "$T/settings/current/MANIFEST.txt" \
-    || fail "MANIFEST.txt does not record com.example.beta.plist as kept_unreadable"
+  grep -qx "kept_unreadable com.example.beta.plist" "$T/settings/current/MANIFEST.txt" ||
+    fail "MANIFEST.txt does not record com.example.beta.plist as kept_unreadable"
 }
 
 test_snapshot_deletes_the_file_of_a_domain_removed_from_the_list() {
-  set_pref com.example.alpha 1; set_pref com.example.beta 1; set_pref com.example.gamma 1
+  set_pref com.example.alpha 1
+  set_pref com.example.beta 1
+  set_pref com.example.gamma 1
   mac_prefs snapshot "$T/settings"
-  printf 'com.example.alpha\ncom.example.gamma\n' > "$T/conf"
-  mac_prefs snapshot "$T/settings"; STATUS=$?
+  printf 'com.example.alpha\ncom.example.gamma\n' >"$T/conf"
+  mac_prefs snapshot "$T/settings"
+  STATUS=$?
   expect_status 0
   expect_no_file "$T/settings/current/com.example.beta.plist"
   expect_file "$T/settings/current/com.example.alpha.plist"
@@ -115,8 +128,10 @@ test_snapshot_deletes_the_file_of_a_domain_removed_from_the_list() {
 }
 
 test_snapshot_writes_the_byhost_half_as_its_own_file() {
-  set_pref com.example.alpha 1; set_pref com.example.alpha 7 byhost
-  mac_prefs snapshot "$T/settings"; STATUS=$?
+  set_pref com.example.alpha 1
+  set_pref com.example.alpha 7 byhost
+  mac_prefs snapshot "$T/settings"
+  STATUS=$?
   expect_status 0
   expect_content "$T/settings/current/com.example.alpha.byhost.plist" "<plist>com.example.alpha 7</plist>"
   expect_file "$T/settings/current/com.example.alpha.plist"
@@ -126,7 +141,8 @@ test_snapshot_writes_the_byhost_half_as_its_own_file() {
 test_snapshot_commits_nothing_when_no_setting_changed() {
   set_pref com.example.alpha 1
   mac_prefs snapshot "$T/settings"
-  mac_prefs snapshot "$T/settings"; STATUS=$?
+  mac_prefs snapshot "$T/settings"
+  STATUS=$?
   expect_status 0
   expect_output "No settings changed since the last snapshot"
   expect_equal "$(commits)" 2 "commits in the settings repo"
@@ -137,17 +153,20 @@ test_snapshot_commits_nothing_when_no_setting_changed() {
 # and half, and a manifest.
 make_export() {
   mkdir -p "$T/export"
-  echo "<plist>com.example.alpha new</plist>" > "$T/export/com.example.alpha.plist"
-  echo "<plist>com.example.alpha new-host</plist>" > "$T/export/com.example.alpha.byhost.plist"
-  printf 'macprefs_version 2\nmacos_version 26.0\n' > "$T/export/MANIFEST.txt"
+  echo "<plist>com.example.alpha new</plist>" >"$T/export/com.example.alpha.plist"
+  echo "<plist>com.example.alpha new-host</plist>" >"$T/export/com.example.alpha.byhost.plist"
+  printf 'macprefs_version 2\nmacos_version 26.0\n' >"$T/export/MANIFEST.txt"
 }
 
 test_import_saves_a_rollback_before_it_imports() {
-  set_pref com.example.alpha old; set_pref com.example.alpha old-host byhost
+  set_pref com.example.alpha old
+  set_pref com.example.alpha old-host byhost
   make_export
-  mac_prefs import "$T/export" --yes; STATUS=$?
+  mac_prefs import "$T/export" --yes
+  STATUS=$?
   expect_status 0
-  local rollback; rollback="$(ls -d "$HOME"/.mac-prefs-rollback/*/ 2>/dev/null | head -n 1)"
+  local rollback
+  rollback="$(ls -d "$HOME"/.mac-prefs-rollback/*/ 2>/dev/null | head -n 1)"
   [ -n "$rollback" ] || fail "no rollback folder"
   expect_content "${rollback}com.example.alpha.plist" "<plist>com.example.alpha old</plist>"
   expect_content "${rollback}com.example.alpha.byhost.plist" "<plist>com.example.alpha old-host</plist>"
@@ -159,7 +178,8 @@ test_import_saves_a_rollback_before_it_imports() {
 test_import_dry_run_changes_nothing() {
   set_pref com.example.alpha old
   make_export
-  mac_prefs import "$T/export" --dry-run; STATUS=$?
+  mac_prefs import "$T/export" --dry-run
+  STATUS=$?
   expect_status 0
   expect_content "$FAKE_PREFS/com.example.alpha.plist" "<plist>com.example.alpha old</plist>"
   expect_no_file "$FAKE_PREFS/imports.log"
@@ -168,8 +188,9 @@ test_import_dry_run_changes_nothing() {
 
 test_import_skips_a_corrupt_file_and_fails() {
   make_export
-  echo "CORRUPT" > "$T/export/com.example.alpha.byhost.plist"
-  mac_prefs import "$T/export" --yes; STATUS=$?
+  echo "CORRUPT" >"$T/export/com.example.alpha.byhost.plist"
+  mac_prefs import "$T/export" --yes
+  STATUS=$?
   expect_status 1
   expect_output "corrupt plist, skipping"
   expect_content "$FAKE_PREFS/com.example.alpha.plist" "<plist>com.example.alpha new</plist>"
@@ -177,9 +198,10 @@ test_import_skips_a_corrupt_file_and_fails() {
 }
 
 test_export_warns_about_a_domain_name_with_an_underscore() {
-  printf 'com.example.my_app\n' > "$T/conf"
+  printf 'com.example.my_app\n' >"$T/conf"
   set_pref com.example.my_app 1
-  mac_prefs export "$T/out-dir"; STATUS=$?
+  mac_prefs export "$T/out-dir"
+  STATUS=$?
   expect_status 0
   expect_output "com.example.my_app -- name does not round-trip"
   expect_file "$T/out-dir/latest/com.example.my_app.plist"

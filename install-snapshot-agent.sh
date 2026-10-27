@@ -17,7 +17,7 @@ set -uo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 LABEL="com.tiavelum.mac-prefs-snapshot"
-OLD_LABEL="com.tiavelum.macprefs-snapshot"   # the label before the tool was renamed; unloaded on install so a re-run leaves one agent, not two
+OLD_LABEL="com.tiavelum.macprefs-snapshot" # the label before the tool was renamed; unloaded on install so a re-run leaves one agent, not two
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 LOG="$HOME/Library/Logs/mac-prefs-snapshot.log"
 # Login Items & Extensions names an agent after the file its first program
@@ -29,26 +29,41 @@ TARGET="$HOME/vc/mac-prefs-config"
 WEEKLY=1
 HOUR=10
 MINUTE=0
-WEEKDAY=0          # 0 = Sunday
+WEEKDAY=0 # 0 = Sunday
 UNINSTALL=0
 
-die() { printf 'fail  %s\n' "$*" >&2; exit 1; }
-ok()  { printf '  ok  %s\n' "$*"; }
+die() {
+  printf 'fail  %s\n' "$*" >&2
+  exit 1
+}
+ok() { printf '  ok  %s\n' "$*"; }
 
 while [ "$#" -gt 0 ]; do
   case "$1" in
-    --daily)     WEEKLY=0 ;;
-    --weekly)    WEEKLY=1 ;;
-    --at)        shift
-                 case "${1:-}" in
-                   [0-9]*:[0-9]*) HOUR="${1%%:*}"; MINUTE="${1##*:}" ;;
-                   *) die "--at wants HH:MM, got '${1:-}'" ;;
-                 esac
-                 HOUR="$((10#$HOUR))"; MINUTE="$((10#$MINUTE))" ;;
-    --target)    shift; TARGET="${1:-}" ;;
+    --daily) WEEKLY=0 ;;
+    --weekly) WEEKLY=1 ;;
+    --at)
+      shift
+      case "${1:-}" in
+        [0-9]*:[0-9]*)
+          HOUR="${1%%:*}"
+          MINUTE="${1##*:}"
+          ;;
+        *) die "--at wants HH:MM, got '${1:-}'" ;;
+      esac
+      HOUR="$((10#$HOUR))"
+      MINUTE="$((10#$MINUTE))"
+      ;;
+    --target)
+      shift
+      TARGET="${1:-}"
+      ;;
     --uninstall) UNINSTALL=1 ;;
-    -h|--help)   sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *)           die "unknown option: $1" ;;
+    -h | --help)
+      sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+      exit 0
+      ;;
+    *) die "unknown option: $1" ;;
   esac
   shift
 done
@@ -56,8 +71,8 @@ done
 [ "$(uname -s)" = "Darwin" ] || die "this script only runs on macOS"
 
 if [ "$UNINSTALL" -eq 1 ]; then
-  launchctl bootout "gui/$UID/$LABEL" 2>/dev/null \
-    || launchctl unload "$PLIST" 2>/dev/null || true
+  launchctl bootout "gui/$UID/$LABEL" 2>/dev/null ||
+    launchctl unload "$PLIST" 2>/dev/null || true
   launchctl bootout "gui/$UID/$OLD_LABEL" 2>/dev/null || true
   rm -f "$PLIST" "$HOME/Library/LaunchAgents/$OLD_LABEL.plist" "$LINK"
   ok "removed $LABEL"
@@ -83,7 +98,7 @@ else
   WHEN="daily at $(printf '%02d:%02d' "$HOUR" "$MINUTE")"
 fi
 
-cat > "$PLIST" <<PLIST_EOF
+cat >"$PLIST" <<PLIST_EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -122,9 +137,9 @@ launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || true
 if launchctl bootstrap "gui/$UID" "$PLIST" 2>/dev/null; then
   ok "loaded $LABEL"
 else
-  launchctl load -w "$PLIST" 2>/dev/null \
-    && ok "loaded $LABEL (legacy launchctl)" \
-    || die "could not load the agent -- check $PLIST"
+  launchctl load -w "$PLIST" 2>/dev/null &&
+    ok "loaded $LABEL (legacy launchctl)" ||
+    die "could not load the agent -- check $PLIST"
 fi
 
 # Verify the effect, not the call. bootstrap can return 0 and the job still
@@ -133,8 +148,8 @@ fi
 if launchctl list | grep -q "$OLD_LABEL"; then
   die "the pre-rename agent $OLD_LABEL is still loaded -- run: launchctl bootout gui/$UID/$OLD_LABEL"
 fi
-launchctl list | grep -q "$LABEL" \
-  || die "$LABEL was installed but is not running -- check $PLIST"
+launchctl list | grep -q "$LABEL" ||
+  die "$LABEL was installed but is not running -- check $PLIST"
 ok "verified: $LABEL is the only snapshot agent loaded"
 
 ok "snapshots $WHEN into $TARGET"
