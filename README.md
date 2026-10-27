@@ -58,7 +58,11 @@ a schedule with `./install-snapshot-agent.sh` (weekly, Sunday 10:00;
 System Settings → General → Login Items & Extensions lists the agent as
 **mac-prefs snapshot**, from an unidentified developer; switched off, no
 snapshots are taken. It shows that name because the agent runs bash through
-a link of that name in `~/Library/Application Support/mac-prefs/`.
+a link of that name in `~/Library/Application Support/mac-prefs/`; the
+launchd key meant for naming an agent, `AssociatedBundleIdentifiers`, has no
+effect here (see
+[AssociatedBundleIdentifiers for LaunchAgents/Daemons](https://developer.apple.com/forums/thread/713493)
+in the Apple Developer Forums).
 
 Restore on a new Mac:
 
