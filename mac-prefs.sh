@@ -298,12 +298,95 @@ cmd_export() {
 
 # ---------------------------------------------------------------- snapshot
 
+# The issue a settings repo's snapshots are made for: `issue=<number>` in
+# <repo>/mac-prefs.conf. With one, snapshots reach the default branch through
+# a pull request (publish_by_pull_request); without, they are pushed
+# (publish_by_push).
+snapshot_issue() {
+  [ -f "$1/mac-prefs.conf" ] || return 0
+  sed -n 's/^issue=\([0-9][0-9]*\)$/\1/p' "$1/mac-prefs.conf" | head -n 1
+}
+
+publish_snapshot() {
+  local issue; issue="$(snapshot_issue "$1")"
+  if [ -n "$issue" ]; then
+    publish_by_pull_request "$1" "$issue"
+  else
+    publish_by_push "$1"
+  fi
+}
+
+# The agent runs with launchd's PATH, which holds no Homebrew directory.
+find_gh() {
+  command -v gh 2>/dev/null && return 0
+  local p
+  for p in /opt/homebrew/bin/gh /usr/local/bin/gh; do
+    [ -x "$p" ] && { printf '%s\n' "$p"; return 0; }
+  done
+  return 1
+}
+
+# Bring the commits waiting on the default branch to the remote as one pull
+# request, and merge it. Every failure only warns: the commits stay, and the
+# next run carries them, since the branch only ever moves forward.
+publish_by_pull_request() {
+  local target="$1" issue="$2" gh upstream base waiting out pr title body
+  local branch="chore/$issue-settings-snapshot"
+  if ! gh="$(find_gh)"; then
+    warn "gh not found -- committed, NOT published; install gh and run gh auth login"
+    return 0
+  fi
+  if ! upstream="$(cd "$target" && git rev-parse --abbrev-ref '@{u}' 2>/dev/null)"; then
+    warn "no upstream branch in $target -- committed, NOT published"
+    return 0
+  fi
+  base="${upstream#*/}"
+  waiting="$(cd "$target" && git rev-list --count "$upstream..HEAD" 2>/dev/null || echo 0)"
+  [ "${waiting:-0}" -gt 0 ] || return 0
+
+  if ! out="$(cd "$target" && git push -q origin "HEAD:refs/heads/$branch" 2>&1)"; then
+    warn "git push of $branch failed -- committed, NOT published; the next snapshot retries"
+    [ -n "$out" ] && warn "  ${out%%$'\n'*}"
+    return 0
+  fi
+  title="$(cd "$target" && git log -1 --format=%s)"
+  body="$(cd "$target" && git log -1 --format=%b)"
+  pr="$(cd "$target" && "$gh" pr list --head "$branch" --state open --json number --jq '.[0].number' 2>/dev/null)"
+  if [ -z "$pr" ]; then
+    if ! out="$(cd "$target" && "$gh" pr create --base "$base" --head "$branch" --title "$title" --body "$body" 2>&1)"; then
+      warn "opening the pull request failed -- pushed to $branch, NOT merged; the next snapshot retries"
+      [ -n "$out" ] && warn "  ${out%%$'\n'*}"
+      return 0
+    fi
+  fi
+  if ! out="$(cd "$target" && "$gh" pr merge "$branch" --squash --subject "$title" --body "$body" 2>&1)"; then
+    warn "merging the pull request failed -- open on $branch; the next snapshot retries"
+    [ -n "$out" ] && warn "  ${out%%$'\n'*}"
+    return 0
+  fi
+  ( cd "$target" && git push -q origin --delete "$branch" ) >/dev/null 2>&1 \
+    || warn "merged, but the branch $branch was not deleted"
+  if ! ( cd "$target" && git fetch -q origin "$base" ) 2>/dev/null; then
+    warn "merged; fetching $upstream failed, so this clone still holds the snapshot commits"
+    return 0
+  fi
+  # The squash holds this clone's current/. Only when the remote shows exactly
+  # that is the clone moved onto it; --keep refuses to touch uncommitted work.
+  if ( cd "$target" && git diff --quiet HEAD "$upstream" -- current \
+         && git reset -q --keep "$upstream" ) 2>/dev/null; then
+    ok "merged into $upstream through a pull request"
+  else
+    warn "merged, but $upstream differs from this clone's current/ -- clone left as is; compare by hand"
+  fi
+  return 0
+}
+
 # Publish the settings repo's waiting commits: pull --rebase, then push.
 # A failure only warns. The snapshot is already committed, and the next run
 # pushes everything still waiting, so an offline Mac loses nothing.
 # --autostash keeps unrelated uncommitted work in the settings repo from
 # blocking every future pull.
-publish_snapshot() {
+publish_by_push() {
   local target="$1" out
   if ! out="$(cd "$target" && git pull -q --rebase --autostash 2>&1)"; then
     warn "git pull failed in $target -- committed, NOT pushed; the next snapshot retries"
@@ -439,9 +522,14 @@ Clone it first, or pass the path:  $0 snapshot <path>"
   fi
 
   local host; host="$(scutil --get ComputerName 2>/dev/null || hostname)"
-  local msg="snapshot: $changed changed on $host
+  local issue; issue="$(snapshot_issue "$target")"
+  local msg="chore: snapshot $changed changed settings
 
+On $host:
 $(cd "$target" && git diff --cached --name-only -- current | sed 's/^current\///' | head -30)"
+  [ -n "$issue" ] && msg="$msg
+
+Part of #$issue"
 
   # Scoped to current/ for the same reason as the staging above.
   if ( cd "$target" && git commit -q -m "$msg" -- current ); then
@@ -697,9 +785,15 @@ SNAPSHOT
   `snapshot` keeps a private settings repo up to date. It writes into
   <repo>/current/ -- overwriting the previous state, because git already
   stores the history -- converts the plists to XML so `git log -p` reads as
-  a changelog, commits only when something actually changed, and then pulls
-  (rebase) and pushes. A failed pull or push only warns; the commit stays,
-  and the next snapshot pushes whatever is still waiting.
+  a changelog, commits only when something actually changed, and then
+  publishes the commit. A failed step only warns; the commit stays, and the
+  next snapshot publishes whatever is still waiting.
+
+  How it publishes: with `issue=<number>` in <repo>/mac-prefs.conf, the
+  commits are made for that issue and reach the default branch through a
+  pull request the run opens and merges with gh, from the branch
+  chore/<number>-settings-snapshot. gh must be installed and logged in.
+  Without the file, the run pulls (rebase) and pushes.
 
   A listed domain this run cannot read keeps its file from the last
   snapshot, and the run names it. The scheduled agent cannot read the

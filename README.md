@@ -38,9 +38,19 @@ mac-prefs-config    private   your settings, folder current/
 
 `snapshot` writes into `<repo>/current/` (git is the history — no
 timestamped folders), stores plists as XML so `git log -p` reads as a
-changelog, commits only when something changed, and then pushes (a failed
-push only warns; the next snapshot pushes what is still waiting). A listed
-domain the run cannot read keeps its file from the last snapshot, and the
+changelog, commits only when something changed, and then publishes the
+commit (a failed step only warns; the next snapshot publishes what is still
+waiting).
+
+How it publishes depends on the settings repo. With a file `mac-prefs.conf`
+at its root holding `issue=<number>`, the commits are made for that issue and
+reach the default branch through a pull request the run opens and merges
+itself, from the branch `chore/<number>-settings-snapshot`. That needs `gh`
+installed and logged in on the Mac (`gh auth login`); the agent finds it in
+`/opt/homebrew/bin` or `/usr/local/bin`. Without the file, the run pulls and
+pushes.
+
+A listed domain the run cannot read keeps its file from the last snapshot, and the
 run names it: the scheduled agent cannot read the settings of sandboxed apps
 such as Photos, Preview and TextEdit, which a run from Terminal can. Run it on
 a schedule with `./install-snapshot-agent.sh` (weekly, Sunday 10:00;
