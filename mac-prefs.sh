@@ -395,7 +395,10 @@ publish_by_pull_request() {
     [ -n "$out" ] && warn "  ${out%%$'\n'*}"
     return 0
   fi
+  # A repository that deletes merged branches has already removed it, so
+  # only a branch still on the remote after the attempt is worth a warning.
   (cd "$target" && git push -q origin --delete "$branch") >/dev/null 2>&1 ||
+    ! (cd "$target" && git ls-remote --exit-code --heads origin "$branch") >/dev/null 2>&1 ||
     warn "merged, but the branch $branch was not deleted"
   if ! (cd "$target" && git fetch -q origin "$base") 2>/dev/null; then
     warn "merged; fetching $upstream failed, so this clone still holds the snapshot commits"
