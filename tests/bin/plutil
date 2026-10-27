@@ -1,0 +1,8 @@
+#!/bin/bash
+# Stand-in for macOS plutil: the stand-in plists are plain text, so
+# converting changes nothing, and a file is valid unless it says CORRUPT.
+if [ "$1" = -lint ]; then
+  ! grep -q CORRUPT "$2"
+  exit
+fi
+exit 0

@@ -1,0 +1,6 @@
+#!/bin/bash
+# Stand-in for macOS sw_vers: the version and build of a made-up macOS.
+case "$1" in
+  -buildVersion) echo 25A100 ;;
+  *) echo 26.0 ;;
+esac

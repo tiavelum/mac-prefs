@@ -1,0 +1,4 @@
+#!/bin/bash
+# Import restarts Finder, Dock and the like; on the test machine there is
+# nothing to restart.
+exit 0
