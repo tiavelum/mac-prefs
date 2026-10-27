@@ -166,10 +166,10 @@ test_import_saves_a_rollback_before_it_imports() {
   STATUS=$?
   expect_status 0
   local rollback
-  rollback="$(ls -d "$HOME"/.mac-prefs-rollback/*/ 2>/dev/null | head -n 1)"
+  rollback="$(find "$HOME/.mac-prefs-rollback" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | head -n 1)"
   [ -n "$rollback" ] || fail "no rollback folder"
-  expect_content "${rollback}com.example.alpha.plist" "<plist>com.example.alpha old</plist>"
-  expect_content "${rollback}com.example.alpha.byhost.plist" "<plist>com.example.alpha old-host</plist>"
+  expect_content "$rollback/com.example.alpha.plist" "<plist>com.example.alpha old</plist>"
+  expect_content "$rollback/com.example.alpha.byhost.plist" "<plist>com.example.alpha old-host</plist>"
   expect_content "$FAKE_PREFS/com.example.alpha.plist" "<plist>com.example.alpha new</plist>"
   expect_content "$FAKE_PREFS/com.example.alpha.byhost.plist" "<plist>com.example.alpha new-host</plist>"
   expect_output "2 imported, 0 failed"

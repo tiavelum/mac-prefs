@@ -292,6 +292,7 @@ cmd_export() {
   info ""
 
   local running
+  # shellcheck disable=SC2086 # split on purpose: one argument per domain
   running="$(running_apps_for_domains $domains)"
   if [ -n "$running" ]; then
     warn "these apps are running; quit them for a fully current export:"
@@ -457,6 +458,7 @@ Clone it first, or pass the path:  $0 snapshot <path>"
   local domains
   domains="$(read_domains)"
   local running
+  # shellcheck disable=SC2086 # split on purpose: one argument per domain
   running="$(running_apps_for_domains $domains)"
   if [ -n "$running" ]; then
     warn "running apps may not have flushed current settings to disk:"
@@ -539,7 +541,7 @@ Clone it first, or pass the path:  $0 snapshot <path>"
   # timestamp that changes every run, so it cannot be the only thing staged.
   local changed
   changed="$(cd "$target" && git diff --cached --name-only -- current |
-    grep -v '^current/MANIFEST.txt$' | wc -l | tr -d ' ')"
+    grep -cv '^current/MANIFEST.txt$')"
 
   if [ "${changed:-0}" -eq 0 ]; then
     # Only MANIFEST.txt moved, and only because it stamps the time. Put it
@@ -562,7 +564,8 @@ Clone it first, or pass the path:  $0 snapshot <path>"
   host="$(scutil --get ComputerName 2>/dev/null || hostname)"
   local issue
   issue="$(snapshot_issue "$target")"
-  local msg="chore: snapshot $changed changed settings
+  local msg
+  msg="chore: snapshot $changed changed settings
 
 On $host:
 $(cd "$target" && git diff --cached --name-only -- current | sed 's/^current\///' | head -30)"
@@ -629,6 +632,7 @@ $plists
 EOF
 
   local running
+  # shellcheck disable=SC2086 # split on purpose: one argument per domain
   running="$(running_apps_for_domains $doms)"
   if [ -n "$running" ]; then
     if [ "$QUIT_APPS" -eq 1 ]; then
@@ -786,7 +790,7 @@ cmd_list() {
 cmd_diff() {
   require_macos
   local dir="${1:-}"
-  [ -n "$dir" ] && [ -d "$dir" ] || die "usage: $0 diff <export-folder>"
+  if [ -z "$dir" ] || [ ! -d "$dir" ]; then die "usage: $0 diff <export-folder>"; fi
   if [ ! -f "$dir/MANIFEST.txt" ] && [ -d "$dir/latest" ]; then dir="$dir/latest"; fi
 
   MP_TMP="$(mktemp -d)"

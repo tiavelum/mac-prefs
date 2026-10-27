@@ -117,6 +117,27 @@ and deletes, that `import` saves its rollback first and that `--dry-run`
 changes nothing. `tests/run.sh import` runs only the tests whose name
 contains `import`. GitHub runs them on every pull request.
 
+## Check formatting and lint
+
+Install shfmt and ShellCheck once, at the versions in `requirements.txt`:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+```
+
+Then, from the repository root:
+
+```bash
+.venv/bin/shfmt -d .
+.venv/bin/shellcheck $(.venv/bin/shfmt -f .)
+```
+
+Both print nothing when the code is clean. `shfmt -d` shows what it would
+change, and `.venv/bin/shfmt -w .` applies it; its options are in
+`.editorconfig`. GitHub runs both checks on every pull request and fails it
+on any finding.
+
 ## Files
 
 | Path | Contains |
@@ -125,7 +146,8 @@ contains `import`. GitHub runs them on every pull request.
 | `mac-prefs-domains.conf` | The domains it covers |
 | `install-snapshot-agent.sh` | Schedules `snapshot` |
 | `tests/` | `run.sh` and, in `bin/`, the stand-ins for the macOS tools |
-| `.github/` | The workflow that runs the tests |
+| `.github/` | The workflow that runs the tests and the checks |
+| `.editorconfig`, `.shellcheckrc`, `requirements.txt` | The settings of the editor, shfmt and ShellCheck, and the versions of the last two |
 
 ## License
 

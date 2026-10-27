@@ -8,3 +8,6 @@ mac-prefs-export/
 ._*
 .Spotlight-V100
 .Trashes
+
+# The local install of the checks
+.venv/

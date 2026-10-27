@@ -137,9 +137,11 @@ launchctl bootout "gui/$UID/$LABEL" 2>/dev/null || true
 if launchctl bootstrap "gui/$UID" "$PLIST" 2>/dev/null; then
   ok "loaded $LABEL"
 else
-  launchctl load -w "$PLIST" 2>/dev/null &&
-    ok "loaded $LABEL (legacy launchctl)" ||
+  if launchctl load -w "$PLIST" 2>/dev/null; then
+    ok "loaded $LABEL (legacy launchctl)"
+  else
     die "could not load the agent -- check $PLIST"
+  fi
 fi
 
 # Verify the effect, not the call. bootstrap can return 0 and the job still
