@@ -14,12 +14,23 @@ jobs:
 
   lint:
     runs-on: ubuntu-24.04
+    env:
+      # The versions Homebrew ships; raise them when Homebrew does.
+      SHELLCHECK_VERSION: 0.11.0
+      SHFMT_VERSION: 3.14.1
     steps:
       - uses: actions/checkout@v4.2.2
-      - uses: actions/setup-python@v5.6.0
-        with:
-          python-version: "3.12"
-      - run: pip install -r requirements.txt
+      - name: Install shfmt and ShellCheck
+        run: |
+          bin="$RUNNER_TEMP/bin"
+          mkdir -p "$bin"
+          curl -fsSL "https://github.com/koalaman/shellcheck/releases/download/v$SHELLCHECK_VERSION/shellcheck-v$SHELLCHECK_VERSION.linux.x86_64.tar.xz" \
+            | tar -xJ -C "$RUNNER_TEMP"
+          mv "$RUNNER_TEMP/shellcheck-v$SHELLCHECK_VERSION/shellcheck" "$bin/"
+          curl -fsSL -o "$bin/shfmt" "https://github.com/mvdan/sh/releases/download/v$SHFMT_VERSION/shfmt_v${SHFMT_VERSION}_linux_amd64"
+          chmod +x "$bin/shfmt"
+          echo "$bin" >> "$GITHUB_PATH"
+      - run: shellcheck --version && shfmt --version
       - name: Formatting
         run: shfmt -d .
       - name: ShellCheck
