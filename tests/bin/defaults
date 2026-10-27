@@ -4,7 +4,10 @@
 # domain without its file cannot be read, as a sandboxed app's cannot by
 # the scheduled agent. Every import is appended to $FAKE_PREFS/imports.log.
 suffix=.plist
-if [ "$1" = -currentHost ]; then suffix=.byhost.plist; shift; fi
+if [ "$1" = -currentHost ]; then
+  suffix=.byhost.plist
+  shift
+fi
 op=$1 domain=$2 file=$3
 store="$FAKE_PREFS/$domain$suffix"
 case "$op" in
@@ -12,7 +15,10 @@ case "$op" in
   export) [ -f "$store" ] && cp "$store" "$file" ;;
   import)
     cp "$file" "$store" || exit 1
-    echo "$domain$suffix" >> "$FAKE_PREFS/imports.log"
+    echo "$domain$suffix" >>"$FAKE_PREFS/imports.log"
     ;;
-  *) echo "defaults stand-in: unsupported operation $op" >&2; exit 2 ;;
+  *)
+    echo "defaults stand-in: unsupported operation $op" >&2
+    exit 2
+    ;;
 esac

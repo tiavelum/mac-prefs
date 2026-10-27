@@ -11,3 +11,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4.2.2
       - run: tests/run.sh
+
+  lint:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - uses: actions/setup-python@v5.6.0
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Formatting
+        run: shfmt -d .
+      - name: ShellCheck
+        run: shellcheck $(shfmt -f .)

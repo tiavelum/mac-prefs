@@ -1,0 +1,2 @@
+# Every finding fails the check, style findings included.
+severity=style
