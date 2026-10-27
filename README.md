@@ -119,24 +119,24 @@ contains `import`. GitHub runs them on every pull request.
 
 ## Check formatting and lint
 
-Install shfmt and ShellCheck once, at the versions in `requirements.txt`:
+Install shfmt and ShellCheck once:
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
+brew install shfmt shellcheck
 ```
 
 Then, from the repository root:
 
 ```bash
-.venv/bin/shfmt -d .
-.venv/bin/shellcheck $(.venv/bin/shfmt -f .)
+shfmt -d .
+shellcheck $(shfmt -f .)
 ```
 
 Both print nothing when the code is clean. `shfmt -d` shows what it would
-change, and `.venv/bin/shfmt -w .` applies it; its options are in
-`.editorconfig`. GitHub runs both checks on every pull request and fails it
-on any finding.
+change, and `shfmt -w .` applies it; its options are in `.editorconfig`.
+GitHub runs both checks on every pull request at the versions named in
+`.github/workflows/test.yml`, and fails it on any finding. A newer local
+version can report a finding GitHub does not, or the other way round.
 
 ## Files
 
@@ -147,7 +147,7 @@ on any finding.
 | `install-snapshot-agent.sh` | Schedules `snapshot` |
 | `tests/` | `run.sh` and, in `bin/`, the stand-ins for the macOS tools |
 | `.github/` | The workflow that runs the tests and the checks |
-| `.editorconfig`, `.shellcheckrc`, `requirements.txt` | The settings of the editor, shfmt and ShellCheck, and the versions of the last two |
+| `.editorconfig`, `.shellcheckrc` | The settings of the editor, shfmt and ShellCheck |
 
 ## License
 
